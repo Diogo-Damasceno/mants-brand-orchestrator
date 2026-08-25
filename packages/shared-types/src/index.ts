@@ -1,4 +1,4 @@
-export { ROLES } from './domain.js';
+export { ROLES, canManageRole } from './domain.js';
 export type { Role } from './domain.js';
 export {
   CAMPAIGN_STATUSES,

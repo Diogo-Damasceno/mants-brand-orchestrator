@@ -37,6 +37,11 @@ export function sha256Sync(input: string): string {
   return nodeCrypto.createHash('sha256').update(normalize(input), 'utf8').digest('hex');
 }
 
+/** Hash de bytes (Buffer/Uint8Array) sem normalização de texto. Para binários de assets/ZIP. */
+export function sha256BytesSync(input: Uint8Array): string {
+  return nodeCrypto.createHash('sha256').update(Buffer.from(input)).digest('hex');
+}
+
 /**
  * Hash canônico de um prompt: ordena campos estáveis para garantir
  * que a mesma entrada produza sempre o mesmo hash (reprodução determinística).

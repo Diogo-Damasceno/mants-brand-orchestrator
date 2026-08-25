@@ -23,7 +23,7 @@ export class HttpError extends Error {
  * Web: cookie HttpOnly (mants_session). Extensão: Bearer token.
  * NUNCA confia em organization_id vindo do body como autorização.
  */
-export function authenticate(req: NextRequest): RequestCtx {
+export async function authenticate(req: NextRequest): Promise<RequestCtx> {
   const authHeader = req.headers.get('authorization');
   let token: string | null = null;
   if (authHeader?.startsWith('Bearer ')) {
@@ -34,6 +34,26 @@ export function authenticate(req: NextRequest): RequestCtx {
   if (!token) throw new HttpError(401, 'Não autenticado.');
   const claims = verifySession(token, getServerConfig().authSecret);
   if (!claims) throw new HttpError(401, 'Sessão inválida ou expirada.');
+
+  // Para tokens de extensão, exige sessão ativa no banco (revogação efetiva).
+  if (claims.ext) {
+    const { getDb, schema } = await import('@mants/database');
+    const { eq, and } = await import('drizzle-orm');
+    const { sha256Hex } = await import('@mants/auth');
+    const [sess] = await getDb()
+      .select()
+      .from(schema.extensionSessions)
+      .where(
+        and(
+          eq(schema.extensionSessions.tokenHash, sha256Hex(token)),
+          eq(schema.extensionSessions.userId, claims.sub),
+          eq(schema.extensionSessions.organizationId, claims.org),
+          eq(schema.extensionSessions.status, 'active'),
+        ),
+      );
+    if (!sess) throw new HttpError(401, 'Sessão de extensão revogada ou inexistente.');
+  }
+
   return {
     claims,
     organizationId: claims.org,

@@ -158,6 +158,7 @@ export const promptGenerateSchema = z.object({
   brandKitId: uuid,
   campaignId: uuid.optional(),
   templateId: uuid.optional(),
+  templateKind: promptTemplateKindSchema,
   promptMode: promptModeSchema,
   objective: z.string().max(1000).optional(),
   productOrService: z.string().max(1000).optional(),

@@ -10,7 +10,7 @@ import { authenticate, json, errorResponse, HttpError } from '@/lib/server/http'
  */
 export async function POST(req: NextRequest) {
   try {
-    const ctx = authenticate(req);
+    const ctx = await authenticate(req);
     const body = await req.json();
     const code = String(body.code ?? '');
     if (!code) throw new HttpError(400, 'Código ausente.');

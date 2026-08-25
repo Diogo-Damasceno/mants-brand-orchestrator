@@ -3,13 +3,17 @@ import { randomUUID } from 'node:crypto';
 import { getDb, schema } from '@mants/database';
 import { eq, and, isNull } from 'drizzle-orm';
 import { authenticate, json, errorResponse, HttpError } from '@/lib/server/http';
-import { promptGenerateSchema, promptEditSchema } from '@mants/validation';
+import { promptGenerateSchema } from '@mants/validation';
 import { generatePrompt } from '@mants/prompt-engine';
-import { sha256Sync } from '@mants/prompt-engine/hash';
+import { sha256Hex } from '@mants/auth';
+import { CONTENT_MANAGER_ROLES } from '@/lib/server/authz';
 
-export async function POST_generate(req: NextRequest) {
+export async function POST(req: NextRequest) {
   try {
-    const ctx = authenticate(req);
+    const ctx = await authenticate(req);
+    if (!ctx.roles.some((r) => CONTENT_MANAGER_ROLES.includes(r))) {
+      throw new HttpError(403, 'Sem permissão.');
+    }
     const body = promptGenerateSchema.parse(await req.json());
     const db = getDb();
     const [bk] = await db
@@ -90,7 +94,7 @@ export async function POST_generate(req: NextRequest) {
         approvedCtas: bk.approvedCtas,
         version: bk.version,
       },
-      templateKind: 'post_instagram',
+      templateKind: body.templateKind,
       mode: body.promptMode,
       campaign: {
         objective: body.objective,
@@ -116,32 +120,10 @@ export async function POST_generate(req: NextRequest) {
       mode: body.promptMode,
       originalText: prompt.originalText,
       version: 1,
-      promptHash: sha256Sync(prompt.originalText),
+      promptHash: sha256Hex(prompt.originalText),
       createdBy: ctx.userId,
     });
     return json({ id, prompt: { ...prompt, id } }, 201);
-  } catch (e) {
-    return errorResponse(e);
-  }
-}
-
-export async function POST_edit(req: NextRequest) {
-  try {
-    const ctx = authenticate(req);
-    const body = promptEditSchema.parse(await req.json());
-    const db = getDb();
-    const [row] = await db
-      .select()
-      .from(schema.generatedPrompts)
-      .where(
-        and(eq(schema.generatedPrompts.id, body.promptId), eq(schema.generatedPrompts.organizationId, ctx.organizationId)),
-      );
-    if (!row) throw new HttpError(404, 'Prompt não encontrado.');
-    await db
-      .update(schema.generatedPrompts)
-      .set({ editedText: body.editedText, editedBy: ctx.userId, editedAt: new Date() })
-      .where(eq(schema.generatedPrompts.id, body.promptId));
-    return json({ ok: true });
   } catch (e) {
     return errorResponse(e);
   }

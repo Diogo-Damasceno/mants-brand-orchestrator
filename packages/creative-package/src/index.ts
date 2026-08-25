@@ -1,6 +1,6 @@
 import type { BrandKitSnapshot } from '@mants/shared-types';
 import type { GeneratedPrompt } from '@mants/prompt-engine';
-import { sha256Sync } from '@mants/prompt-engine';
+import { sha256BytesSync, sha256Sync } from '@mants/prompt-engine';
 import JSZip from 'jszip';
 
 export interface PackageAssetFile {
@@ -52,7 +52,7 @@ function addManifestFiles(manifest: import('@mants/shared-types').ManifestFile[]
     path: file.path,
     mimeType: file.mimeType,
     sizeBytes: file.content.byteLength,
-    sha256: sha256Sync(Buffer.from(file.content).toString('binary')),
+    sha256: sha256BytesSync(file.content),
   });
 }
 

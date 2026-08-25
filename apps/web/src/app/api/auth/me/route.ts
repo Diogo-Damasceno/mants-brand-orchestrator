@@ -5,7 +5,7 @@ import { authenticate, json, errorResponse } from '@/lib/server/http';
 
 export async function GET(req: NextRequest) {
   try {
-    const ctx = authenticate(req);
+    const ctx = await authenticate(req);
     const db = getDb();
     const [user] = await db.select().from(schema.users).where(eq(schema.users.id, ctx.userId));
     const orgs = await db

@@ -2,18 +2,9 @@ import { NextRequest } from 'next/server';
 import { randomUUID } from 'node:crypto';
 import { getDb, schema } from '@mants/database';
 import { json, errorResponse, HttpError } from '@/lib/server/http';
-import { getServerConfig } from '@mants/config';
+import { assertAllowedOrigin } from '@/lib/server/extension';
 
 /** Valida origem contra allowlist exata (não prefixo genérico). */
-export function assertAllowedOrigin(origin: string): void {
-  const allowed = getServerConfig().extensionAllowedApiOrigin
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean);
-  if (!allowed.includes(origin)) {
-    throw new HttpError(403, 'Origem não autorizada.');
-  }
-}
 
 /**
  * Passo 1 do fluxo PKCE da extensão.
