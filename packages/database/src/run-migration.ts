@@ -1,11 +1,12 @@
-import { readdirSync, readFileSync, existsSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { getPool, type DbPool } from './client.js';
+import { getPool, type DbClient } from './client.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = join(__dirname, 'migrations');
+const LOCK_KEY = 98234719;
 
 function checksum(sql: string): string {
   return createHash('sha256').update(sql, 'utf8').digest('hex');
@@ -16,7 +17,7 @@ interface MigrationRow {
   checksum: string;
 }
 
-async function loadApplied(client: DbPool): Promise<Map<string, string>> {
+async function loadApplied(client: DbClient): Promise<Map<string, string>> {
   const res = await client.query<MigrationRow>('SELECT name, checksum FROM _mants_migrations ORDER BY name');
   const map = new Map<string, string>();
   for (const row of res.rows) map.set(row.name, row.checksum);
@@ -25,14 +26,14 @@ async function loadApplied(client: DbPool): Promise<Map<string, string>> {
 
 async function main() {
   const pool = getPool();
-
   const files = readdirSync(MIGRATIONS_DIR)
     .filter((f) => f.endsWith('.sql'))
     .sort((a, b) => a.localeCompare(b));
 
   const client = await pool.connect();
+  let locked = false;
   try {
-    // Garante tabela de controle.
+    // 1. Garante tabela de controle ANTES do lock (precisa existir para registrar).
     await client.query(`
       CREATE TABLE IF NOT EXISTS _mants_migrations (
         name text PRIMARY KEY,
@@ -41,11 +42,19 @@ async function main() {
       );
     `);
 
+    // 2. ADQUIRE o advisory lock ANTES de carregar o estado aplicado.
+    //    Dois processos que carregassem o estado antes do lock poderiam reaplicar.
+    //    Usa try_lock: se outro processo já segura, aborta com erro claro.
+    const lockRes = await client.query<{ locked: boolean }>('SELECT pg_try_advisory_lock($1) AS locked', [LOCK_KEY]);
+    if (!lockRes.rows[0]?.locked) {
+      throw new Error('Outro processo já está executando as migrations (advisory lock ocupado).');
+    }
+    locked = true;
+
+    // 3. Carrega estado aplicado DENTRO do lock.
     const applied = await loadApplied(client);
 
-    // Lock exclusivo para evitar dois processos concorrentes.
-    await client.query('SELECT pg_advisory_lock(98234719)');
-
+    // 4. Valida checksums e aplica pendentes, tudo sob o mesmo lock.
     let pending = 0;
     for (const file of files) {
       const sql = readFileSync(join(MIGRATIONS_DIR, file), 'utf8');
@@ -61,6 +70,7 @@ async function main() {
         continue; // já aplicada, não reaplicar
       }
 
+      // 5. Uma transação por migration.
       try {
         await client.query('BEGIN');
         await client.query(sql);
@@ -76,14 +86,15 @@ async function main() {
       }
     }
 
-    await client.query('SELECT pg_advisory_unlock(98234719)');
     if (pending === 0) {
       console.log('Nenhuma migration pendente.');
     } else {
       console.log(`${pending} migration(s) aplicada(s).`);
     }
   } finally {
-    await client.query('SELECT pg_advisory_unlock(98234719)').catch(() => {});
+    if (locked) {
+      await client.query('SELECT pg_advisory_unlock($1)', [LOCK_KEY]).catch(() => {});
+    }
     client.release();
     await pool.end();
   }

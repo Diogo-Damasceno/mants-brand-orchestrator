@@ -1,15 +1,25 @@
-import { NextRequest } from 'next/server';
+import { timingSafeEqual } from 'node:crypto';
 import { getDb, schema } from '@mants/database';
 import { eq, and, isNull, gt } from 'drizzle-orm';
 import { json, errorResponse, HttpError } from '@/lib/server/http';
 import { extensionCodeExchangeSchema } from '@mants/validation';
-import { signSession, createPkceChallenge } from '@mants/auth';
+import { signSession, createPkceChallenge, hashSessionToken, sha256Hex } from '@mants/auth';
 import { getServerConfig } from '@mants/config';
 import { assertAllowedOrigin } from '@/lib/server/extension';
 
 function maskCode(code: string): string {
   if (code.length <= 8) return '***';
   return `${code.slice(0, 4)}…${code.slice(-4)}`;
+}
+
+/** Compara dois hashes em tempo constante (evita timing attack). */
+function hashMatches(storedHash: string | null | undefined, plainValue: string | undefined): boolean {
+  if (!storedHash || !plainValue) return false;
+  const computed = sha256Hex(plainValue);
+  const a = Buffer.from(storedHash);
+  const b = Buffer.from(computed);
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
 }
 
 /**
@@ -55,6 +65,19 @@ export async function POST(req: NextRequest) {
         throw new HttpError(403, 'PKCE inválido (replay/CSRF).');
       }
 
+      // 2b. Código cancelado nunca pode ser trocado.
+      if (codeRow.cancelledAt) {
+        throw new HttpError(403, 'Código de autorização cancelado.');
+      }
+
+      // 2c. Valida state/nonce em tempo constante (hashes armazenados).
+      if (codeRow.stateHash && !hashMatches(codeRow.stateHash, body.state)) {
+        throw new HttpError(403, 'state inválido (CSRF).');
+      }
+      if (codeRow.nonceHash && !hashMatches(codeRow.nonceHash, body.nonce)) {
+        throw new HttpError(403, 'nonce inválido.');
+      }
+
       // 3. Papel real do usuário na organização.
       const [member] = await tx
         .select()
@@ -79,7 +102,7 @@ export async function POST(req: NextRequest) {
         getServerConfig().authSecret,
         getServerConfig().sessionTtlSeconds,
       );
-      const tokenHash = createPkceChallenge(token); // sha256 base64url como hash do token
+      const tokenHash = hashSessionToken(token);
       await tx.insert(schema.extensionSessions).values({
         userId: codeRow.userId,
         organizationId: codeRow.organizationId,

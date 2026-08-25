@@ -166,6 +166,16 @@ export function sha256Hex(input: string): string {
   return createHash('sha256').update(input).digest('hex');
 }
 
+/**
+ * Hash canônico do token de sessão da extensão.
+ * Formato único: SHA-256 em hexadecimal.
+ * Usado em: criação (exchange), autenticação, revogação e logout.
+ * NÃO reutilizar createPkceChallenge() para esta finalidade (semântica diferente).
+ */
+export function hashSessionToken(token: string): string {
+  return sha256Hex(token);
+}
+
 export function randomToken(bytes = 24): string {
   return randomBytes(bytes).toString('hex');
 }

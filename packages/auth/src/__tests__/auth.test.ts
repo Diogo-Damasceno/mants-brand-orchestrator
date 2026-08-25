@@ -7,6 +7,8 @@ import {
   verifySession,
   createPkceChallenge,
   generatePkce,
+  hashSessionToken,
+  sha256Hex,
 } from '../index';
 
 const SECRET = 'test-secret';
@@ -44,6 +46,20 @@ describe('scrypt password hashing', () => {
 
   it('rejects passwords outside size limits at hash time', () => {
     expect(() => hashPassword('curta')).toThrow();
+  });
+});
+
+describe('session token hash', () => {
+  it('hashSessionToken é determinístico e diferente de createPkceChallenge', () => {
+    const token = 'eyJhbGciOiJIUzI1NiJ9.payload.sig';
+    expect(hashSessionToken(token)).toBe(hashSessionToken(token));
+    expect(hashSessionToken(token)).toBe(sha256Hex(token));
+    // A mesma função canônica deve ser usada em criação e autenticação.
+    expect(hashSessionToken(token)).not.toBe(createPkceChallenge(token));
+  });
+
+  it('tokens diferentes produzem hashes diferentes', () => {
+    expect(hashSessionToken('a')).not.toBe(hashSessionToken('b'));
   });
 });
 

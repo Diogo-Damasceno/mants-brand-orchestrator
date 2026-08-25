@@ -39,6 +39,8 @@ export const extensionCodeExchangeSchema = z.object({
   codeVerifier: z.string().min(16).max(256),
   deviceId: z.string().min(4).max(128),
   origin: z.string().url(),
+  state: z.string().min(8).max(256).optional(),
+  nonce: z.string().min(8).max(256).optional(),
 });
 export type ExtensionCodeExchangeInput = z.infer<typeof extensionCodeExchangeSchema>;
 

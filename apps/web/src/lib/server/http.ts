@@ -39,13 +39,13 @@ export async function authenticate(req: NextRequest): Promise<RequestCtx> {
   if (claims.ext) {
     const { getDb, schema } = await import('@mants/database');
     const { eq, and } = await import('drizzle-orm');
-    const { sha256Hex } = await import('@mants/auth');
+    const { hashSessionToken } = await import('@mants/auth');
     const [sess] = await getDb()
       .select()
       .from(schema.extensionSessions)
       .where(
         and(
-          eq(schema.extensionSessions.tokenHash, sha256Hex(token)),
+          eq(schema.extensionSessions.tokenHash, hashSessionToken(token)),
           eq(schema.extensionSessions.userId, claims.sub),
           eq(schema.extensionSessions.organizationId, claims.org),
           eq(schema.extensionSessions.status, 'active'),

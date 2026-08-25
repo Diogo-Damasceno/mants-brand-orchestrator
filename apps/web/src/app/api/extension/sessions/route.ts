@@ -1,8 +1,8 @@
 import { NextRequest } from 'next/server';
 import { getDb, schema } from '@mants/database';
-import { eq } from 'drizzle-orm';
+import { eq, and } from 'drizzle-orm';
 import { authenticate, json, errorResponse } from '@/lib/server/http';
-import { sha256Hex } from '@mants/auth';
+import { hashSessionToken } from '@mants/auth';
 
 /** Lista as sessões de extensão do usuário (sem hashes). */
 export async function GET(req: NextRequest) {
@@ -26,17 +26,26 @@ export async function GET(req: NextRequest) {
   }
 }
 
-/** Logout da extensão (revoga a sessão informada via Bearer) ou todas. */
+/** Logout da extensão (revoga somente a sessão autenticada por este Bearer). */
 export async function POST(req: NextRequest) {
   try {
+    const ctx = await authenticate(req);
     const auth = req.headers.get('authorization') ?? '';
     const token = auth.replace('Bearer ', '');
+    const tokenHash = hashSessionToken(token);
     const db = getDb();
-    const tokenHash = sha256Hex(token);
-    await db
+    // Revoga apenas a sessão do usuário autenticado que corresponde a este token.
+    const result = await db
       .update(schema.extensionSessions)
       .set({ status: 'revoked', revokedAt: new Date() })
-      .where(eq(schema.extensionSessions.tokenHash, tokenHash));
+      .where(
+        and(
+          eq(schema.extensionSessions.tokenHash, tokenHash),
+          eq(schema.extensionSessions.userId, ctx.userId),
+          eq(schema.extensionSessions.status, 'active'),
+        ),
+      );
+    void result;
     return json({ ok: true });
   } catch (e) {
     return errorResponse(e);
