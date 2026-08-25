@@ -1,4 +1,4 @@
-import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import type { Role } from '@mants/shared-types';
 
 export interface SessionClaims {
@@ -18,6 +18,10 @@ function b64url(input: Buffer | string): string {
     .replace(/\+/g, '-')
     .replace(/\//g, '_')
     .replace(/=+$/, '');
+}
+
+export function base64url(input: Buffer | string): string {
+  return b64url(input);
 }
 
 function b64urlJson(obj: unknown): string {
@@ -63,16 +67,29 @@ export function verifySession(token: string, secret: string): SessionClaims | nu
   }
 }
 
-export function hashPassword(password: string, salt = randomBytes(16).toString('hex')): string {
-  const derived = createHash('sha256').update(`${salt}:${password}`).digest('hex');
-  return `${salt}:${derived}`;
+export const PASSWORD_MIN_LENGTH = 8;
+export const PASSWORD_MAX_LENGTH = 200;
+
+/**
+ * Armazena senha com scrypt (nativo do Node), salt único por registro.
+ * Formato: scrypt$N$r$p$saltHex$hashHex
+ */
+export function hashPassword(password: string): string {
+  const salt = randomBytes(16);
+  const derived = scryptSync(password, salt, 64);
+  return `scrypt$64$1$${salt.toString('hex')}$${derived.toString('hex')}`;
 }
 
 export function verifyPassword(password: string, stored: string): boolean {
-  const [salt, hash] = stored.split(':');
-  if (!salt || !hash) return false;
-  const derived = createHash('sha256').update(`${salt}:${password}`).digest('hex');
-  return timingSafeEqual(Buffer.from(hash), Buffer.from(derived));
+  const parts = stored.split('$');
+  if (parts.length !== 5 || parts[0] !== 'scrypt') return false;
+  const salt = parts[3];
+  const expectedHex = parts[4];
+  if (!salt || !expectedHex) return false;
+  const expected = Buffer.from(expectedHex, 'hex');
+  const derived = scryptSync(password, Buffer.from(salt, 'hex'), expected.length);
+  if (derived.length !== expected.length) return false;
+  return timingSafeEqual(derived, expected);
 }
 
 // ----- PKCE (extensão troca código por sessão) -----

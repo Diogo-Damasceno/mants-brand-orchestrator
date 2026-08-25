@@ -94,8 +94,8 @@ CREATE INDEX IF NOT EXISTS idx_ext_sessions_org ON extension_sessions(organizati
 
 CREATE TABLE IF NOT EXISTS auth_codes (
   code varchar(128) PRIMARY KEY,
-  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  organization_id uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  user_id uuid REFERENCES users(id) ON DELETE CASCADE,
+  organization_id uuid REFERENCES organizations(id) ON DELETE CASCADE,
   code_challenge text NOT NULL,
   device_id varchar(128) NOT NULL,
   origin text NOT NULL,

@@ -132,12 +132,8 @@ export const extensionSessions = pgTable('extension_sessions', {
 
 export const authCodes = pgTable('auth_codes', {
   code: varchar('code', { length: 128 }).primaryKey(),
-  userId: uuid('user_id')
-    .notNull()
-    .references(() => users.id, { onDelete: 'cascade' }),
-  organizationId: uuid('organization_id')
-    .notNull()
-    .references(() => organizations.id, { onDelete: 'cascade' }),
+  userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }),
+  organizationId: uuid('organization_id').references(() => organizations.id, { onDelete: 'cascade' }),
   codeChallenge: text('code_challenge').notNull(),
   deviceId: varchar('device_id', { length: 128 }).notNull(),
   origin: text('origin').notNull(),

@@ -3,6 +3,11 @@ import { getDb, schema } from '@mants/database';
 import { eq, and, isNull, desc } from 'drizzle-orm';
 import type { RequestCtx } from './http.js';
 
+/**
+ * Cria organização + membro dono em uma única transação.
+ * O usuário já deve existir (criado antes da chamada).
+ * Rollback automático em caso de falha.
+ */
 export async function createOrganizationWithOwner(input: {
   name: string;
   slug: string;
@@ -12,19 +17,46 @@ export async function createOrganizationWithOwner(input: {
 }): Promise<string> {
   const db = getDb();
   const orgId = randomUUID();
-  await db.insert(schema.organizations).values({
-    id: orgId,
-    name: input.name,
-    slug: input.slug,
-    planTier: 'basic',
-  });
-  await db.insert(schema.organizationMembers).values({
-    organizationId: orgId,
-    userId: input.ownerId,
-    role: 'organization_owner',
-    invitedBy: input.ownerId,
+  await db.transaction(async (tx) => {
+    await tx.insert(schema.organizations).values({
+      id: orgId,
+      name: input.name,
+      slug: input.slug,
+      planTier: 'basic',
+    });
+    await tx.insert(schema.organizationMembers).values({
+      organizationId: orgId,
+      userId: input.ownerId,
+      role: 'organization_owner',
+      invitedBy: input.ownerId,
+    });
+    // Assinatura básica inicial.
+    await tx.insert(schema.subscriptions).values({
+      id: randomUUID(),
+      organizationId: orgId,
+      tier: 'basic',
+      provider: 'mock',
+      status: 'active',
+      currentPeriodEnd: new Date(Date.now() + 30 * 86400_000),
+    });
   });
   return orgId;
+}
+
+/** Verifica disponibilidade de slug e acrescenta sufixo seguro em caso de colisão. */
+export async function slugAvailable(base: string): Promise<string> {
+  const db = getDb();
+  let candidate = base;
+  for (let i = 1; i <= 20; i++) {
+    const [existing] = await db
+      .select({ id: schema.organizations.id })
+      .from(schema.organizations)
+      .where(eq(schema.organizations.slug, candidate));
+    if (!existing) return candidate;
+    candidate = `${base}-${i}`;
+  }
+  // Fallback com UUID para garantir unicidade.
+  return `${base}-${randomUUID().slice(0, 8)}`;
 }
 
 export async function listClients(ctx: RequestCtx) {
