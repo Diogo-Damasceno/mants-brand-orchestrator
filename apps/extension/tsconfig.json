@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "types": ["wxt"],
+    "noEmit": true,
+    "moduleResolution": "bundler"
+  },
+  "include": ["src", "wxt.config.ts"]
+}

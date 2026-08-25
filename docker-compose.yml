@@ -1,0 +1,57 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: mants-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: mants
+      POSTGRES_PASSWORD: mants_password
+      POSTGRES_DB: mants_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - mants-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mants -d mants_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    container_name: mants-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: mants_minio
+      MINIO_ROOT_PASSWORD: mants_minio_secret
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - mants-minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # Cria o bucket privado automaticamente (idempotente)
+  minio-init:
+    image: minio/mc:latest
+    container_name: mants-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 mants_minio mants_minio_secret &&
+      mc mb --ignore-existing local/mants-private &&
+      mc anonymous set none local/mants-private &&
+      echo 'minio bucket ready'
+      "
+    restart: "no"
+
+volumes:
+  mants-postgres-data:
+  mants-minio-data:

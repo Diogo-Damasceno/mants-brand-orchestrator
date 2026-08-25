@@ -1,0 +1,31 @@
+{
+  "name": "@mants/extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wxt",
+    "build": "wxt build",
+    "zip": "wxt zip",
+    "lint": "eslint . --max-warnings 0",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@mants/shared-types": "workspace:*",
+    "@mants/prompt-engine": "workspace:*",
+    "@mants/validation": "workspace:*",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "webextension-polyfill": "^0.12.0"
+  },
+  "devDependencies": {
+    "@types/react": "18.3.12",
+    "@types/react-dom": "18.3.1",
+    "@types/webextension-polyfill": "^0.12.0",
+    "@wxt-dev/module-react": "^1.1.0",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.4",
+    "wxt": "^0.20.0"
+  }
+}

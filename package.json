@@ -1,0 +1,42 @@
+{
+  "name": "mants-brand-orchestrator",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Mants Brand Orchestrator — plataforma de orquestração de branding para ChatGPT (Mants Company)",
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "lint": "turbo lint",
+    "typecheck": "turbo typecheck",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "pnpm --filter @mants/web test:e2e",
+    "extension:dev": "pnpm --filter @mants/extension dev",
+    "extension:build": "pnpm --filter @mants/extension build",
+    "extension:zip": "pnpm --filter @mants/extension zip",
+    "db:generate": "pnpm --filter @mants/database generate",
+    "db:migrate": "pnpm --filter @mants/database migrate",
+    "db:seed": "pnpm --filter @mants/database seed",
+    "format": "prettier --write \"**/*.{ts,tsx,md,json}\""
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "@typescript-eslint/eslint-plugin": "^8.13.0",
+    "@typescript-eslint/parser": "^8.13.0",
+    "eslint": "^8.57.1",
+    "eslint-config-prettier": "^9.1.0",
+    "prettier": "^3.3.3",
+    "turbo": "^2.2.3",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.4"
+  },
+  "pnpm": {
+    "overrides": {
+      "@vitejs/plugin-react": "4.3.4"
+    }
+  },
+  "packageManager": "pnpm@9.12.3",
+  "engines": {
+    "node": ">=20.18.0"
+  }
+}

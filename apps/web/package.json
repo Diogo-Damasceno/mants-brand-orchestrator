@@ -1,0 +1,41 @@
+{
+  "name": "@mants/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev -p 3000",
+    "build": "next build",
+    "start": "next start -p 3000",
+    "lint": "next lint --max-warnings 0",
+    "typecheck": "tsc --noEmit",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@mants/shared-types": "workspace:*",
+    "@mants/config": "workspace:*",
+    "@mants/validation": "workspace:*",
+    "@mants/database": "workspace:*",
+    "@mants/auth": "workspace:*",
+    "@mants/billing": "workspace:*",
+    "@mants/prompt-engine": "workspace:*",
+    "@mants/creative-package": "workspace:*",
+    "@mants/asset-selection": "workspace:*",
+    "next": "14.2.18",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "drizzle-orm": "^0.36.4",
+    "pg": "^8.13.1",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "@types/pg": "^8.11.10",
+    "@types/react": "18.3.12",
+    "@types/react-dom": "18.3.1",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.15",
+    "typescript": "^5.6.3"
+  }
+}

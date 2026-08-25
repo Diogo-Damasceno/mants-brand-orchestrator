@@ -1,0 +1,16 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light dark;
+}
+
+body {
+  font-family: Inter, system-ui, sans-serif;
+}
+
+/* Tema escuro respeitando preferências do sistema e toggle */
+.dark body {
+  background-color: #020617;
+}
