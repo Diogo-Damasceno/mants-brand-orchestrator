@@ -111,9 +111,6 @@ importers:
       '@mants/validation':
         specifier: workspace:*
         version: link:../../packages/validation
-      '@types/jsdom':
-        specifier: ^21.1.7
-        version: 21.1.7
       drizzle-orm:
         specifier: ^0.36.4
         version: 0.36.4(@types/pg@8.23.1)(@types/react@18.3.12)(pg@8.23.0)(react@18.3.1)
@@ -136,6 +133,9 @@ importers:
         specifier: ^3.23.8
         version: 3.25.76
     devDependencies:
+      '@types/jsdom':
+        specifier: ^21.1.7
+        version: 21.1.7
       '@types/node':
         specifier: ^22.9.0
         version: 22.20.1

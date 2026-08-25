@@ -140,7 +140,7 @@ CREATE TABLE IF NOT EXISTS brand_kits (
   icons jsonb NOT NULL DEFAULT '[]',
   graphic_elements jsonb NOT NULL DEFAULT '[]',
   approved_photos jsonb NOT NULL DEFAULT '[]',
-  references jsonb NOT NULL DEFAULT '[]',
+  "references" jsonb NOT NULL DEFAULT '[]',
   approved_examples jsonb NOT NULL DEFAULT '[]',
   rejected_examples jsonb NOT NULL DEFAULT '[]',
   usage_rules text,
@@ -265,7 +265,7 @@ CREATE TABLE IF NOT EXISTS asset_product_relations (
 
 CREATE TABLE IF NOT EXISTS asset_campaign_relations (
   asset_id uuid NOT NULL REFERENCES brand_assets(id) ON DELETE CASCADE,
-  campaign_id uuid NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+  campaign_id uuid NOT NULL,
   PRIMARY KEY (asset_id, campaign_id)
 );
 
@@ -311,7 +311,7 @@ CREATE TABLE IF NOT EXISTS campaigns (
   tone varchar(200),
   mandatory_content jsonb NOT NULL DEFAULT '[]',
   prohibited_content jsonb NOT NULL DEFAULT '[]',
-  references jsonb NOT NULL DEFAULT '[]',
+  "references" jsonb NOT NULL DEFAULT '[]',
   selected_asset_ids jsonb NOT NULL DEFAULT '[]',
   prompt_mode prompt_mode NOT NULL DEFAULT 'professional',
   variations integer NOT NULL DEFAULT 1,
@@ -326,7 +326,7 @@ CREATE TABLE IF NOT EXISTS campaigns (
 CREATE INDEX IF NOT EXISTS idx_campaigns_org ON campaigns(organization_id);
 
 CREATE TABLE IF NOT EXISTS campaign_assets (
-  campaign_id uuid NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+  campaign_id uuid NOT NULL,
   asset_id uuid NOT NULL REFERENCES brand_assets(id) ON DELETE CASCADE,
   PRIMARY KEY (campaign_id, asset_id)
 );
@@ -337,7 +337,7 @@ CREATE TABLE IF NOT EXISTS generated_prompts (
   organization_id uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
   brand_kit_id uuid REFERENCES brand_kits(id) ON DELETE SET NULL,
   brand_kit_version integer,
-  campaign_id uuid REFERENCES campaigns(id) ON DELETE SET NULL,
+  campaign_id uuid,
   template_id uuid REFERENCES prompt_templates(id) ON DELETE SET NULL,
   template_version integer,
   mode prompt_mode NOT NULL,
@@ -357,7 +357,7 @@ CREATE TABLE IF NOT EXISTS creative_packages (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   organization_id uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
   client_id uuid REFERENCES clients(id) ON DELETE SET NULL,
-  campaign_id uuid REFERENCES campaigns(id) ON DELETE SET NULL,
+  campaign_id uuid,
   creator_id uuid REFERENCES users(id),
   file_name varchar(255) NOT NULL,
   storage_key text NOT NULL,
@@ -393,7 +393,7 @@ CREATE TABLE IF NOT EXISTS legal_acceptances (
 CREATE TABLE IF NOT EXISTS results (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   organization_id uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-  campaign_id uuid REFERENCES campaigns(id) ON DELETE CASCADE,
+  campaign_id uuid,
   prompt_id uuid REFERENCES generated_prompts(id) ON DELETE SET NULL,
   package_id uuid REFERENCES creative_packages(id) ON DELETE SET NULL,
   status result_status NOT NULL DEFAULT 'submitted',
@@ -578,3 +578,14 @@ ALTER TABLE users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE extension_sessions ENABLE ROW LEVEL SECURITY;
 CREATE POLICY users_self ON users USING (id = current_setting('app.current_user', true)::uuid OR current_setting('app.is_platform_admin', true) = 'true');
 CREATE POLICY ext_sessions_user ON extension_sessions USING (user_id = current_setting('app.current_user', true)::uuid OR current_setting('app.is_platform_admin', true) = 'true');
+-- FKs diferidas para campaigns (criadas após todas as tabelas, ordem independente)
+ALTER TABLE asset_campaign_relations ADD CONSTRAINT fk_acr_campaign
+  FOREIGN KEY (campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED;
+ALTER TABLE campaign_assets ADD CONSTRAINT fk_ca_campaign
+  FOREIGN KEY (campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED;
+ALTER TABLE generated_prompts ADD CONSTRAINT fk_gp_campaign
+  FOREIGN KEY (campaign_id) REFERENCES campaigns(id) ON DELETE SET NULL DEFERRABLE INITIALLY DEFERRED;
+ALTER TABLE creative_packages ADD CONSTRAINT fk_cp_campaign
+  FOREIGN KEY (campaign_id) REFERENCES campaigns(id) ON DELETE SET NULL DEFERRABLE INITIALLY DEFERRED;
+ALTER TABLE results ADD CONSTRAINT fk_res_campaign
+  FOREIGN KEY (campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED;

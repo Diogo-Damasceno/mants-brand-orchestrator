@@ -20,4 +20,5 @@ export function getDb() {
 }
 
 export type Db = ReturnType<typeof getDb>;
+export type DbPool = Pool;
 export { schema };
