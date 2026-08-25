@@ -1,6 +1,7 @@
 'use client';
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { apiPost } from '@/lib/client/api';
 
 export default function LoginForm() {
   const [email, setEmail] = useState('');
@@ -14,15 +15,10 @@ export default function LoginForm() {
     setLoading(true);
     setError('');
     try {
-      const res = await fetch('/api/auth', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? 'Falha ao entrar.');
-      localStorage.setItem('mants_token', data.token);
+      const res = await apiPost<{ ok: boolean }>('/api/auth/login', { email, password });
+      if (!res.ok) throw new Error('Falha ao entrar.');
       router.push('/dashboard');
+      router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Erro.');
     } finally {

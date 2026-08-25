@@ -1,12 +1,12 @@
 import { NextRequest } from 'next/server';
-import { randomUUID } from 'node:crypto';
 import { getDb, schema } from '@mants/database';
 import { eq } from 'drizzle-orm';
 import { json, errorResponse, HttpError } from '@/lib/server/http';
 import { registerSchema } from '@mants/validation';
-import { hashPassword, signSession } from '@mants/auth';
+import { signSession } from '@mants/auth';
 import { getServerConfig } from '@mants/config';
-import { createOrganizationWithOwner, slugAvailable } from '@/lib/server/repositories';
+import { registerUserWithOrg, slugAvailable } from '@/lib/server/repositories';
+import { setSessionCookie } from '@/lib/server/session';
 
 export async function POST(req: NextRequest) {
   try {
@@ -20,26 +20,18 @@ export async function POST(req: NextRequest) {
       .where(eq(schema.users.email, email));
     if (existing) throw new HttpError(409, 'E-mail já cadastrado.');
 
-    const userId = randomUUID();
-
-    // Slug único com sufixo seguro em caso de colisão.
+    // Slug único com sufixo seguro em caso de colisão (a constraint do banco também protege).
     let slug = body.organizationName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
     if (!slug) slug = 'org';
     slug = await slugAvailable(slug);
 
-    const orgId = await createOrganizationWithOwner({
-      name: body.organizationName,
-      slug,
-      ownerId: userId,
-      ownerEmail: email,
-      ownerName: body.name,
-    });
-
-    await db.insert(schema.users).values({
-      id: userId,
-      email,
+    // Cadastro completo em UMA transação (usuário + org + membro + assinatura + contadores + auditoria).
+    const { userId, orgId } = await registerUserWithOrg({
       name: body.name,
-      passwordHash: hashPassword(body.password),
+      email,
+      password: body.password,
+      organizationName: body.organizationName,
+      slug,
     });
 
     const token = signSession(
@@ -48,7 +40,9 @@ export async function POST(req: NextRequest) {
       getServerConfig().sessionTtlSeconds,
     );
 
-    return json({ token, userId, organizationId: orgId }, 201);
+    const res = json({ userId, organizationId: orgId }, 201);
+    setSessionCookie(res, token);
+    return res;
   } catch (e) {
     return errorResponse(e);
   }

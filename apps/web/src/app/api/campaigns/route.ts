@@ -10,10 +10,16 @@ export async function GET(req: NextRequest) {
   try {
     const ctx = await authenticate(req);
     const db = getDb();
+    const brandKitId = req.nextUrl.searchParams.get('brandKitId');
+    const where = and(
+      eq(schema.campaigns.organizationId, ctx.organizationId),
+      isNull(schema.campaigns.deletedAt),
+      brandKitId ? eq(schema.campaigns.brandKitId, brandKitId) : undefined,
+    );
     const rows = await db
       .select()
       .from(schema.campaigns)
-      .where(and(eq(schema.campaigns.organizationId, ctx.organizationId), isNull(schema.campaigns.deletedAt)))
+      .where(where)
       .orderBy(desc(schema.campaigns.createdAt));
     return json({ campaigns: rows });
   } catch (e) {

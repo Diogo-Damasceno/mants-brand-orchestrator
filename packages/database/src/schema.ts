@@ -137,6 +137,8 @@ export const authCodes = pgTable('auth_codes', {
   codeChallenge: text('code_challenge').notNull(),
   deviceId: varchar('device_id', { length: 128 }).notNull(),
   origin: text('origin').notNull(),
+  extensionName: varchar('extension_name', { length: 160 }).notNull().default('Mants Brand Orchestrator'),
+  browser: varchar('browser', { length: 80 }),
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
   usedAt: timestamp('used_at', { withTimezone: true }),
 });

@@ -1,6 +1,7 @@
 'use client';
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { apiPost } from '@/lib/client/api';
 
 export default function RegisterForm() {
   const [name, setName] = useState('');
@@ -16,15 +17,15 @@ export default function RegisterForm() {
     setLoading(true);
     setError('');
     try {
-      const res = await fetch('/api/auth', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, organizationName, email, password }),
+      const res = await apiPost<{ ok: boolean }>('/api/auth/register', {
+        name,
+        organizationName,
+        email,
+        password,
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? 'Falha ao cadastrar.');
-      localStorage.setItem('mants_token', data.token);
+      if (!res.ok) throw new Error('Falha ao cadastrar.');
       router.push('/dashboard');
+      router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Erro.');
     } finally {

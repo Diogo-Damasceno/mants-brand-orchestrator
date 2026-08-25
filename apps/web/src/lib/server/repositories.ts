@@ -2,11 +2,11 @@ import { randomUUID } from 'node:crypto';
 import { getDb, schema } from '@mants/database';
 import { eq, and, isNull, desc } from 'drizzle-orm';
 import type { RequestCtx } from './http.js';
+import { hashPassword } from '@mants/auth';
 
 /**
  * Cria organização + membro dono em uma única transação.
- * O usuário já deve existir (criado antes da chamada).
- * Rollback automático em caso de falha.
+ * Mantida para uso em convites/criação de org adicional.
  */
 export async function createOrganizationWithOwner(input: {
   name: string;
@@ -41,6 +41,72 @@ export async function createOrganizationWithOwner(input: {
     });
   });
   return orgId;
+}
+
+/**
+ * Cadastro completo em UMA transação:
+ * usuário -> organização -> membro -> assinatura -> contadores -> auditoria.
+ * Rollback automático se qualquer etapa falhar.
+ * Colisões de e-mail/slug são tratadas pelas constraints do banco (unique).
+ */
+export async function registerUserWithOrg(input: {
+  name: string;
+  email: string;
+  password: string;
+  organizationName: string;
+  slug: string;
+}): Promise<{ userId: string; orgId: string }> {
+  const db = getDb();
+  const userId = randomUUID();
+  const orgId = randomUUID();
+  const passwordHash = hashPassword(input.password);
+  await db.transaction(async (tx) => {
+    await tx.insert(schema.users).values({
+      id: userId,
+      email: input.email,
+      name: input.name,
+      passwordHash,
+    });
+    await tx.insert(schema.organizations).values({
+      id: orgId,
+      name: input.organizationName,
+      slug: input.slug,
+      planTier: 'basic',
+    });
+    await tx.insert(schema.organizationMembers).values({
+      organizationId: orgId,
+      userId,
+      role: 'organization_owner',
+      invitedBy: userId,
+    });
+    await tx.insert(schema.subscriptions).values({
+      id: randomUUID(),
+      organizationId: orgId,
+      tier: 'basic',
+      provider: 'mock',
+      status: 'active',
+      currentPeriodEnd: new Date(Date.now() + 30 * 86400_000),
+    });
+    for (const metric of ['brand_kits', 'clients', 'members', 'storage_bytes', 'packages_month']) {
+      await tx.insert(schema.usageCounters).values({
+        id: randomUUID(),
+        organizationId: orgId,
+        metric,
+        period: new Date().toISOString().slice(0, 7),
+        count: 0,
+      });
+    }
+    await tx.insert(schema.auditLogs).values({
+      id: randomUUID(),
+      organizationId: orgId,
+      actorId: userId,
+      action: 'register',
+      entity: 'user',
+      entityId: userId,
+      detail: { email: input.email },
+    });
+  });
+  return { userId, orgId };
 }
 
 /** Verifica disponibilidade de slug e acrescenta sufixo seguro em caso de colisão. */
