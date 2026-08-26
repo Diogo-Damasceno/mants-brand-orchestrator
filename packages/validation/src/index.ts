@@ -39,8 +39,22 @@ export const extensionCodeExchangeSchema = z.object({
   codeVerifier: z.string().min(16).max(256),
   deviceId: z.string().min(4).max(128),
   origin: z.string().url(),
+  state: z.string().min(16).max(128),
+  nonce: z.string().min(16).max(128),
 });
 export type ExtensionCodeExchangeInput = z.infer<typeof extensionCodeExchangeSchema>;
+
+export const extensionCodeStartSchema = z.object({
+  codeChallenge: z.string().min(16).max(256),
+  deviceId: z.string().min(4).max(128),
+  origin: z.string().url(),
+  stateHash: z.string().regex(/^[a-f0-9]{64}$/),
+  nonceHash: z.string().regex(/^[a-f0-9]{64}$/),
+  browser: z.string().max(80).optional(),
+  extensionVersion: z.string().max(40).optional(),
+  extensionName: z.string().max(160).optional(),
+});
+export type ExtensionCodeStartInput = z.infer<typeof extensionCodeStartSchema>;
 
 // ----- Organization / Client -----
 export const organizationCreateSchema = z.object({

@@ -41,7 +41,23 @@ export default function ExtensionAuthorizePage() {
       await apiPost('/api/extension/auth/authorize', { code });
       router.push(`/extension/authorize/success?code=${encodeURIComponent(code)}`);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Erro');
+      router.push(
+        `/extension/authorize/error?message=${encodeURIComponent(e instanceof Error ? e.message : 'Erro')}`,
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onCancel() {
+    setBusy(true);
+    setError('');
+    try {
+      await apiPost('/api/extension/auth/cancel', { code });
+      router.push(`/extension/authorize/cancelled?code=${encodeURIComponent(code)}`);
+    } catch (e) {
+      // Mesmo em erro de cancelamento, mostramos a tela de cancelamento.
+      router.push(`/extension/authorize/cancelled?code=${encodeURIComponent(code)}`);
     } finally {
       setBusy(false);
     }
@@ -71,7 +87,7 @@ export default function ExtensionAuthorizePage() {
         <button className="flex-1 rounded-md bg-brand px-4 py-2 font-semibold text-slate-900" disabled={busy} onClick={onAuthorize}>
           {busy ? 'Autorizando…' : 'Autorizar'}
         </button>
-        <button className="flex-1 rounded-md border border-slate-300 px-4 py-2 dark:border-slate-700" disabled={busy} onClick={() => router.back()}>
+        <button className="flex-1 rounded-md border border-slate-300 px-4 py-2 dark:border-slate-700" disabled={busy} onClick={onCancel}>
           Cancelar
         </button>
       </div>

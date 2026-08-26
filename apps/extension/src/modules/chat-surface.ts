@@ -1,9 +1,9 @@
-
 /**
  * Adaptador isolado para inserção de texto no ChatGPT.
- * Responsabilidade mínima: tentar inserir mediante clique explícito.
+ * Responsabilidade mínima: tentar inserir mediante clique explícito do usuário.
  * NÃO lê cookies, histórico, nem envia mensagens automaticamente.
- * A inserção é experimental e fica atrás da feature flag FEATURE_CHATGPT_ASSISTED_INSERTION.
+ * O bloqueio por feature flag ocorre no painel/background; aqui apenas inserimos
+ * quando chamado a partir da aba do ChatGPT. Nunca clicamos em "Enviar".
  */
 
 export interface ChatCompatibility {
@@ -14,12 +14,6 @@ export interface ChatCompatibility {
 export interface InsertResult {
   ok: boolean;
   reason?: string;
-}
-
-const ASSISTED_INSERTION_ENABLED = false; // definido pela API em runtime; fallback seguro desligado.
-
-export function isFeatureAssistedInsertionEnabled(): boolean {
-  return ASSISTED_INSERTION_ENABLED;
 }
 
 export class ChatSurfaceAdapter {
@@ -40,9 +34,6 @@ export class ChatSurfaceAdapter {
   /** Tenta inserir texto no campo de prompt. Retorna sucesso/falha para o fallback. */
   static async insertText(text: string): Promise<InsertResult> {
     if (!this.isSupported()) return { ok: false, reason: 'Página incompatível.' };
-    if (!isFeatureAssistedInsertionEnabled()) {
-      return { ok: false, reason: 'Inserção assistida desativada. Use "Copiar prompt".' };
-    }
     try {
       const ta = document.querySelector('textarea');
       if (!ta) return { ok: false, reason: 'Campo não encontrado.' };

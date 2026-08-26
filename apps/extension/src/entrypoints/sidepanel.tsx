@@ -1,7 +1,14 @@
 import { useState, useEffect } from 'react';
-import { getSession } from '../modules/storage';
-import { apiGet, apiPost, getApiBase } from '../modules/api';
-import { ChatSurfaceAdapter } from '../modules/chat-surface';
+import {
+  getSession,
+  getApiBase,
+  apiGet,
+  apiPost,
+  apiPatch,
+  authenticatedDownload,
+  setUnauthorizedHandler,
+} from '../modules/api';
+import type { ExtensionSession } from '../modules/api';
 
 interface Option {
   id: string;
@@ -43,8 +50,15 @@ export default defineSidepanel(() => {
   const [prompt, setPrompt] = useState('');
   const [edited, setEdited] = useState('');
 
+  function onSessionExpired() {
+    setStatus('Sessão expirada. Faça login na extensão novamente.');
+    setToken('');
+    setOrg('');
+  }
+
   useEffect(() => {
-    getSession<{ token: string; organizationId: string }>()
+    setUnauthorizedHandler(onSessionExpired);
+    getSession()
       .then(async (s) => {
         if (!s) {
           setStatus('Não autenticado. Faça login na extensão.');
@@ -58,8 +72,7 @@ export default defineSidepanel(() => {
         } catch {
           /* padrão desligado */
         }
-        await loadClients(s.token);
-        await loadBrandKits(s.token);
+        await Promise.all([loadClients(s.token), loadBrandKits(s.token)]);
         setStatus('Pronto.');
       })
       .catch(() => setStatus('Falha ao carregar sessão.'));
@@ -69,32 +82,32 @@ export default defineSidepanel(() => {
     try {
       const d = await apiGet<{ clients: Option[] }>('/api/clients', t);
       setClients(d.clients ?? []);
-    } catch {
-      /* silencioso */
+    } catch (e) {
+      if (isUnauthorized(e)) onSessionExpired();
     }
   }
   async function loadBrandKits(t: string) {
     try {
       const d = await apiGet<{ brandKits: Option[] }>('/api/brand-kits', t);
       setBrandKits(d.brandKits ?? []);
-    } catch {
-      /* silencioso */
+    } catch (e) {
+      if (isUnauthorized(e)) onSessionExpired();
     }
   }
   async function loadCampaigns(t: string, bk: string) {
     try {
       const d = await apiGet<{ campaigns: Option[] }>(`/api/campaigns?brandKitId=${bk}`, t);
       setCampaigns(d.campaigns ?? []);
-    } catch {
-      /* silencioso */
+    } catch (e) {
+      if (isUnauthorized(e)) onSessionExpired();
     }
   }
   async function loadAssets(t: string, bk: string) {
     try {
       const d = await apiGet<{ assets: AssetOption[] }>(`/api/assets?brandKitId=${bk}`, t);
       setAssets(d.assets ?? []);
-    } catch {
-      /* silencioso */
+    } catch (e) {
+      if (isUnauthorized(e)) onSessionExpired();
     }
   }
 
@@ -127,16 +140,20 @@ export default defineSidepanel(() => {
       setEdited(d.prompt.originalText);
       setStatus('Prompt gerado (sem LLM).');
     } catch (e) {
+      if (isUnauthorized(e)) onSessionExpired();
       setStatus(e instanceof Error ? e.message : 'Falha ao gerar.');
     }
   }
 
   async function onSaveEdit() {
     if (!token || !promptId) return setStatus('Gere um prompt primeiro.');
+    setStatus('Salvando…');
     try {
-      await apiPost('/api/prompts/' + promptId, token, { promptId, editedText: edited });
+      // A API real aceita PATCH em /api/prompts/:id (contrato verificado em teste).
+      await apiPatch(`/api/prompts/${promptId}`, token, { promptId, editedText: edited });
       setStatus('Edição salva.');
     } catch (e) {
+      if (isUnauthorized(e)) onSessionExpired();
       setStatus(e instanceof Error ? e.message : 'Falha ao salvar.');
     }
   }
@@ -155,8 +172,13 @@ export default defineSidepanel(() => {
       setStatus('Inserção assistida desativada. Use "Copiar prompt".');
       return;
     }
-    const r = await ChatSurfaceAdapter.insertText(edited || prompt);
-    setStatus(r.ok ? 'Inserido no ChatGPT.' : `Falha: ${r.reason}. Use "Copiar prompt".`);
+    // Envia ao background, que encaminha ao content script na aba do ChatGPT.
+    const resp = await browser.runtime.sendMessage({ type: 'INSERT_TEXT', text: edited || prompt });
+    if (resp?.type === 'INSERT_RESULT') {
+      setStatus(resp.ok ? 'Inserido no ChatGPT.' : `Falha: ${resp.reason}. Use "Copiar prompt".`);
+    } else {
+      setStatus('Falha ao inserir. Use "Copiar prompt".');
+    }
   }
 
   async function onDownload() {
@@ -169,28 +191,40 @@ export default defineSidepanel(() => {
         promptId,
         assetIds: selectedAssets,
       });
-      browser.tabs.create({ url: `${getApiBase()}/api/packages/${d.id}/download` });
+      // Download autenticado via fetch + Blob (envia Bearer); nunca abre URL sem token.
+      const url = await authenticatedDownload(`/api/packages/${d.id}/download`, token);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `mants-pacote-${d.id}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
       setStatus('Pacote gerado. Download iniciado.');
     } catch (e) {
+      if (isUnauthorized(e)) onSessionExpired();
       setStatus(e instanceof Error ? e.message : 'Falha ao gerar pacote.');
     }
   }
 
   function onOpenChat() {
-    browser.tabs.create({ url: 'https://chatgpt.com/' });
+    browser.runtime.sendMessage({ type: 'OPEN_CHATGPT' });
   }
 
   async function onRegisterUsed() {
     if (!token || !promptId) return setStatus('Gere um prompt primeiro.');
     try {
-      await apiPost('/api/prompts/' + promptId + '/usage', token, {}).catch(() => undefined);
+      await apiPost(`/api/prompts/${promptId}/usage`, token, {});
       setStatus('Uso registrado.');
-    } catch {
-      setStatus('Uso registrado (local).');
+    } catch (e) {
+      if (isUnauthorized(e)) onSessionExpired();
+      // Só informa sucesso se a API confirmou.
+      setStatus(e instanceof Error ? e.message : 'Falha ao registrar uso.');
     }
   }
 
   function onImportResult() {
+    // Rota existente no site (apps/web/src/app/resultados/importar/page.tsx).
     browser.tabs.create({ url: `${getApiBase()}/resultados/importar` });
   }
 
@@ -206,7 +240,7 @@ export default defineSidepanel(() => {
         </select>
       </label>
       <label>Brand Kit
-        <select value={brandKit} onChange={(e) => { setBrandKit(e.target.value); if (e.target.value) { loadCampaigns(token, e.target.value); loadAssets(token, e.target.value); } }} style={{ width: '100%' }}>
+        <select value={brandKit} onChange={(e) => { setBrandKit(e.target.value); if (e.target.value) { void loadCampaigns(token, e.target.value); void loadAssets(token, e.target.value); } }} style={{ width: '100%' }}>
           <option value="">— selecione —</option>
           {brandKits.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
         </select>
@@ -283,3 +317,7 @@ export default defineSidepanel(() => {
     </div>
   );
 });
+
+function isUnauthorized(e: unknown): boolean {
+  return e instanceof Error && (e as { status?: number }).status === 401;
+}

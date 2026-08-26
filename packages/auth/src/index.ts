@@ -166,6 +166,14 @@ export function sha256Hex(input: string): string {
   return createHash('sha256').update(input).digest('hex');
 }
 
+/** Comparação de strings hex (hash) em tempo constante (evita vazamento de timing). */
+export function timingSafeEqualHex(a: string, b: string): boolean {
+  const ba = Buffer.from(a, 'utf8');
+  const bb = Buffer.from(b, 'utf8');
+  if (ba.length !== bb.length) return false;
+  return timingSafeEqual(ba, bb);
+}
+
 export function randomToken(bytes = 24): string {
   return randomBytes(bytes).toString('hex');
 }

@@ -489,12 +489,17 @@ CREATE TABLE IF NOT EXISTS global_notices (
 );
 
 -- ============================================================================
--- Row Level Security (RLS)
--- Cada tabela com organization_id é protegida. O papel de app (mants_app)
--- define organization_id via SET LOCAL a partir do token da requisição.
+-- Isolamento multi-tenant
+-- O isolamento entre organizações é garantido NA CAMADA DA APLICAÇÃO: toda
+-- consulta restringe por organization_id a partir do token da requisição
+-- (RequestCtx.organizationId). O banco não habilita RLS porque a aplicação
+-- conecta como dona do schema (o que contornaria qualquer policy). A função
+-- withTenant() em lib/server/http.ts documenta o ponto de integração caso
+-- uma role dedicada de leitura seja introduzida no futuro.
 -- ============================================================================
-ALTER TABLE organizations ENABLE ROW LEVEL SECURITY;
-ALTER TABLE clients ENABLE ROW LEVEL SECURITY;
+
+-- (sem RLS: ver migrations/0003_extension_pkce_fields.sql)
+
 ALTER TABLE brand_kits ENABLE ROW LEVEL SECURITY;
 ALTER TABLE brand_colors ENABLE ROW LEVEL SECURITY;
 ALTER TABLE brand_fonts ENABLE ROW LEVEL SECURITY;

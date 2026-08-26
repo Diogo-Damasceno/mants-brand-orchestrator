@@ -139,6 +139,11 @@ export const authCodes = pgTable('auth_codes', {
   origin: text('origin').notNull(),
   extensionName: varchar('extension_name', { length: 160 }).notNull().default('Mants Brand Orchestrator'),
   browser: varchar('browser', { length: 80 }),
+  extensionVersion: varchar('extension_version', { length: 40 }),
+  stateHash: varchar('state_hash', { length: 64 }),
+  nonceHash: varchar('nonce_hash', { length: 64 }),
+  authorizedAt: timestamp('authorized_at', { withTimezone: true }),
+  cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
   usedAt: timestamp('used_at', { withTimezone: true }),
 });

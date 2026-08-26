@@ -4,7 +4,7 @@ import { eq, and, isNull, gt } from 'drizzle-orm';
 import { sql } from 'drizzle-orm';
 import { json, errorResponse, HttpError } from '@/lib/server/http';
 import { extensionCodeExchangeSchema } from '@mants/validation';
-import { signSession, sha256Hex, base64url } from '@mants/auth';
+import { signSession, sha256Hex, base64url, timingSafeEqualHex } from '@mants/auth';
 import { getServerConfig } from '@mants/config';
 import { assertAllowedOrigin } from '@/lib/server/extension';
 
@@ -35,6 +35,15 @@ export async function POST(req: NextRequest) {
     // Verifica PKCE S256: BASE64URL(SHA256(code_verifier)) sem passar por hex.
     if (base64url(Buffer.from(sha256Hex(body.codeVerifier), 'utf8')) !== codeRow.codeChallenge) {
       throw new HttpError(403, 'PKCE inválido (replay/CSRF).');
+    }
+
+    // Verifica state e nonce em tempo constante (raw -> hash SHA-256 == hash armazenado).
+    const stateHash = sha256Hex(body.state);
+    const nonceHash = sha256Hex(body.nonce);
+    const eqState = timingSafeEqualHex(stateHash, codeRow.stateHash ?? '');
+    const eqNonce = timingSafeEqualHex(nonceHash, codeRow.nonceHash ?? '');
+    if (!eqState || !eqNonce) {
+      throw new HttpError(403, 'State/nonce inválido (CSRF).');
     }
 
     // Consumo atômico: só marca usado se ainda não foi e não expirou. Se 0 linhas, rejeita.
