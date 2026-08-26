@@ -224,9 +224,9 @@ test.describe('Fluxo PKCE completo (extensão real Chrome/Chromium)', () => {
       expect(download.suggestedFilename().toLowerCase().endsWith('.zip')).toBe(true);
       expect(fs.statSync(dlPath).size).toBeGreaterThan(0);
 
-      // 8. Uso registrado via API (autenticado pelo cookie web da conta seed).
-      const usage = await apiFetch('POST', '/api/usage', { campaignId: seed.campaignId, brandKitId: seed.brandKitId }, cookie);
-      expect([200, 201]).toContain(usage.status);
+      // 8. Uso registrado via UI da extensão (POST /api/prompts/{id}/usage).
+      await sp.getByRole('button', { name: /registrar uso/i }).click();
+      await sp.getByText(/uso registrado/i).first().waitFor({ timeout: 10_000 });
 
       // 7. Antes do logout, captura a sessão da extensão (cookie web ainda válido).
       const before = await apiFetch('GET', '/api/extension/sessions', undefined, cookie);
