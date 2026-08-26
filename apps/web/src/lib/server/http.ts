@@ -66,15 +66,11 @@ export function isPlatformAdmin(ctx: RequestCtx): boolean {
   return ctx.roles.includes('platform_admin');
 }
 
-/**
- * Define o contexto RLS no Postgres via SET LOCAL (parametrizado, sem concatenação).
- * Usa set_config com $1,$2,$3 para evitar injeção de SQL.
- */
-export async function withTenant(pool: { query: (t: string, v?: unknown[]) => Promise<unknown> }, ctx: RequestCtx) {
-  await pool.query('SELECT set_config($1, $2, true)', ['app.current_organization', ctx.organizationId]);
-  await pool.query('SELECT set_config($1, $2, true)', ['app.current_user', ctx.userId]);
-  await pool.query('SELECT set_config($1, $2, true)', ['app.is_platform_admin', String(isPlatformAdmin(ctx))]);
-}
+// Observação de isolamento multitenant (não há RLS nativo do Postgres):
+// a separação entre organizações é feita por filtros explícitos `organizationId`
+// em TODAS as queries (rotas by-ID usam `.returning()` + 404 em 0 linhas afetadas),
+// validada por testes de integração (multitenancy.integration.test.ts). A função
+// `withTenant` (set_config) foi removida por estar sem uso.
 
 export function json(data: unknown, status = 200): NextResponse {
   return NextResponse.json(data, { status });

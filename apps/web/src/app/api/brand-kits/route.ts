@@ -40,6 +40,14 @@ export async function POST(req: NextRequest) {
       throw new HttpError(402, `Limite de Brand Kits do plano ${plan.name} atingido.`);
     }
     const body = brandKitCreateSchema.parse(await req.json());
+    // Valida que o cliente pertence à organização (404 se for de outra org).
+    if (body.clientId) {
+      const [client] = await db
+        .select()
+        .from(schema.clients)
+        .where(and(eq(schema.clients.id, body.clientId), eq(schema.clients.organizationId, ctx.organizationId), isNull(schema.clients.deletedAt)));
+      if (!client) throw new HttpError(404, 'Cliente não encontrado nesta organização.');
+    }
     const id = randomUUID();
     await db.insert(schema.brandKits).values({ id, organizationId: ctx.organizationId, version: 1, ...body });
     for (const c of body.colors ?? []) {
@@ -69,7 +77,7 @@ export async function POST(req: NextRequest) {
         commercialRightsConfirmed: f.commercialRightsConfirmed,
       });
     }
-    return json({ id }, 201);
+    return json({ id, clientId: body.clientId ?? null }, 201);
   } catch (e) {
     return errorResponse(e);
   }

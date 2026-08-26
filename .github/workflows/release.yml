@@ -16,35 +16,9 @@ env:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: mants
-          POSTGRES_PASSWORD: mants_password
-          POSTGRES_DB: mants_db
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U mants"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-      # MinIO com imagem fixa (sem :latest) e comando explícito de server.
-      minio:
-        image: minio/minio:RELEASE.2024-08-03T04-19-31Z
-        env:
-          MINIO_ROOT_USER: mants_minio
-          MINIO_ROOT_PASSWORD: mants_minio_secret
-        ports:
-          - 9000:9000
-        # Health via endpoint HTTP real do MinIO (não depende de mc no server).
-        options: >-
-          --health-cmd "curl -fsS http://localhost:9000/minio/health/ready || exit 1"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 10
     env:
+      # Banco administrativo (existente) usado para CRIAR o mants_test.
+      DATABASE_ADMIN_URL: postgresql://mants:mants_password@localhost:5432/mants_db
       DATABASE_URL: postgresql://mants:mants_password@localhost:5432/mants_test
       STORAGE_ENDPOINT: http://localhost:9000
       STORAGE_ACCESS_KEY_ID: mants_minio
@@ -55,37 +29,72 @@ jobs:
       - uses: actions/checkout@v4
       - run: corepack enable
       - run: corepack prepare pnpm@9.12.3 --activate
+      # Gate de versão do pnpm (falha se não for 9.12.3).
+      - name: Versão do pnpm
+        run: |
+          test "$(pnpm --version)" = "9.12.3" || { echo "pnpm $(pnpm --version) != 9.12.3"; exit 1; }
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: pnpm
-      - name: Instala (frozen lockfile — não modifica lockfile)
+      - name: Instala (frozen lockfile)
         run: pnpm install --frozen-lockfile
-      - name: Unitários (falha se nenhum teste rodou)
-        run: |
-          OUT=$(pnpm test --reporter=dot 2>&1) || { echo "$OUT"; exit 1; }
-          echo "$OUT" | grep -qE "Test Files +[1-9]" || { echo "NENHUM teste executado"; exit 1; }
       - name: Lint
         run: pnpm lint
       - name: Typecheck (web)
         run: pnpm --filter @mants/web typecheck
-      - name: Cria banco de teste (idempotente, sem ocultar falha)
+      - name: Cria banco de teste (URL administrativa; sem ocultar falha)
         run: |
-          psql "$DATABASE_URL" -tc "SELECT 1 FROM pg_database WHERE datname='mants_test'" | grep -q 1 || psql "$DATABASE_URL" -c "CREATE DATABASE mants_test;"
-      - name: Cria bucket privado no MinIO (cliente mc separado)
+          psql "$DATABASE_ADMIN_URL" -tc "SELECT 1 FROM pg_database WHERE datname='mants_test'" | grep -q 1 || \
+          psql "$DATABASE_ADMIN_URL" -c "CREATE DATABASE mants_test"
+      - name: MinIO (container dedicado, imagem fixa, server /data + console)
+        run: |
+          docker run -d --name mants-minio -p 9000:9000 -p 9001:9001 \
+            -e MINIO_ROOT_USER=mants_minio -e MINIO_ROOT_PASSWORD=mants_minio_secret \
+            minio/minio:RELEASE.2024-08-03T04-19-31Z server /data --console-address :9001
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:9000/minio/health/ready && break
+            sleep 2
+          done
+          curl -fsS http://localhost:9000/minio/health/ready || { echo "MinIO não ficou pronto"; docker logs mants-minio; exit 1; }
+      - name: Cria bucket privado (cliente mc separado)
         run: |
           docker run --rm --network host -e MC_HOST_local=http://mants_minio:mants_minio_secret@localhost:9000 minio/mc:RELEASE.2024-08-03T04-19-31Z mb --ignore-existing local/mants-private
           docker run --rm --network host -e MC_HOST_local=http://mants_minio:mants_minio_secret@localhost:9000 minio/mc:RELEASE.2024-08-03T04-19-31Z anonymous set local/mants-private none
       - name: Migrations (explicitamente ANTES dos testes)
         run: pnpm db:migrate
+      - name: Unitários (falha se nenhum teste rodou)
+        run: |
+          OUT=$(pnpm test --reporter=dot 2>&1) || { echo "$OUT"; exit 1; }
+          echo "$OUT" | grep -qE "Test Files +[1-9]" || { echo "NENHUM teste executado"; exit 1; }
       - name: Integração (Postgres + MinIO obrigatórios)
         run: pnpm test:integration --reporter=dot
       - name: Build web
         run: pnpm build
-      - name: Build extensão (Chrome/Edge/Firefox) — falha se não buildar
+      - name: Health readiness do app web
+        run: |
+          pnpm --filter @mants/web start & SRV=$!
+          trap 'kill $SRV 2>/dev/null || true' EXIT
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:3000/api/health/ready && break
+            sleep 2
+          done
+          curl -fsS http://localhost:3000/api/health/ready >/dev/null 2>&1 || { echo "App não ficou pronto (readiness)"; kill $SRV; exit 1; }
+      - name: Build Chrome LOCAL para E2E (API_BASE=localhost)
+        env:
+          BUILD_MODE: development
+          API_BASE: http://localhost:3000
+        run: pnpm extension:build:chrome
+      - name: E2E (Chrome real contra app local; falha claramente se ausente)
+        run: pnpm test:e2e || { echo "E2E ausente ou falhou — job falha"; kill $SRV 2>/dev/null || true; exit 1; }
+      - name: Encerra servidor web
+        if: always()
+        run: kill $SRV 2>/dev/null || true
+      - name: Limpa build local de E2E
+        run: rm -rf apps/extension/.output/chrome-mv3
+      - name: Builds de PRODUÇÃO (API_BASE via secret)
         env:
           BUILD_MODE: production
-          # Domínio oficial exigido via secret; fallback para domínio de teste válido.
           API_BASE: ${{ secrets.API_BASE || 'https://api.mants.company' }}
           FIREFOX_GECKO_ID: mants-brand-orchestrator@mants.company
         run: |
@@ -95,23 +104,15 @@ jobs:
           test -d apps/extension/.output/chrome-mv3 || { echo "Build Chrome ausente"; exit 1; }
           test -d apps/extension/.output/edge-mv3 || { echo "Build Edge ausente"; exit 1; }
           test -d apps/extension/.output/firefox-mv3 || { echo "Build Firefox ausente"; exit 1; }
-      - name: E2E (Chrome real; falha claramente se browser/build ausente)
-        env:
-          APP_URL: http://localhost:3000
-          API_BASE: ${{ secrets.API_BASE || 'https://api.mants.company' }}
+      - name: Inspeciona manifests (sem localhost)
         run: |
-          which chromium chromium-browser google-chrome chrome 2>/dev/null || npx playwright install chromium
-          # Servidor gerenciado com espera de saúde explícita (sem || true).
-          pnpm --filter @mants/web start &
-          SRV=$!
-          for i in $(seq 1 30); do
-            curl -fsS http://localhost:3000/api/health >/dev/null 2>&1 && break
-            sleep 2
+          for d in chrome-mv3 edge-mv3 firefox-mv3; do
+            test -f apps/extension/.output/$d/manifest.json || { echo "manifest ausente em $d"; exit 1; }
           done
-          curl -fsS http://localhost:3000/api/health >/dev/null 2>&1 || { echo "App não ficou saudável"; kill $SRV; exit 1; }
-          pnpm test:e2e || { echo "E2E ausente ou falhou — job falha"; kill $SRV; exit 1; }
-          kill $SRV
-      - name: ZIP (valida artefatos reais)
+          if rg -n "localhost" apps/extension/.output/chrome-mv3 apps/extension/.output/edge-mv3 apps/extension/.output/firefox-mv3; then
+            echo "localhost encontrado em build de produção"; exit 1
+          fi
+      - name: ZIPs (valida artefatos reais)
         run: |
           pnpm extension:zip:chrome
           pnpm extension:zip:edge
@@ -120,7 +121,6 @@ jobs:
             f=$(ls apps/extension/.output/${z}.zip 2>/dev/null || true)
             test -n "$f" || { echo "ZIP $z ausente"; exit 1; }
             test -s "$f" || { echo "ZIP $z vazio"; exit 1; }
-            # Abre o ZIP e valida conteúdo mínimo.
             python3 - "$f" <<'PY'
           import sys, zipfile, re
           zf = zipfile.ZipFile(sys.argv[1])
@@ -140,20 +140,18 @@ jobs:
           print("OK", sys.argv[1], len(names), "arquivos")
           PY
           done
-      - name: Sem localhost nos builds de produção
+      - name: Upload artefatos (ZIPs) para homologação
+        uses: actions/upload-artifact@v4
+        with:
+          name: extension-zips
+          path: apps/extension/.output/*.zip
+          if-no-files-found: error
+      - name: Verifica ícones obrigatórios
         run: |
-          if rg -n "localhost" apps/extension/.output/chrome-mv3 apps/extension/.output/edge-mv3 apps/extension/.output/firefox-mv3; then
-            echo "localhost encontrado em build de produção"; exit 1
-          fi
-
-  optional:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    steps:
-      - uses: actions/checkout@v4
-      - run: corepack enable && corepack prepare pnpm@9.12.3 --activate
-      - uses: actions/setup-node@v4
-        with: { node-version: 22, cache: pnpm }
-      - run: pnpm install --frozen-lockfile
-      - name: Testes opcionais (não bloqueiam release)
-        run: pnpm test:optional --reporter=dot || echo "::warning::testes opcionais falharam (não bloqueiam)"
+          for s in 16 32 48 96 128; do
+            f=apps/extension/public/icon-${s}.png
+            test -f "$f" || { echo "ÍCONE AUSENTE: $f"; exit 1; }
+          done
+      - name: Encerra MinIO
+        if: always()
+        run: docker rm -f mants-minio 2>/dev/null || true

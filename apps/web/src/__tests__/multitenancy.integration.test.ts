@@ -19,7 +19,7 @@ const { signSession, hashSessionToken } = await import('@mants/auth');
 const { getServerConfig } = await import('@mants/config');
 import { NextRequest } from 'next/server';
 import type { Role } from '@mants/shared-types';
-const { eq } = await import('drizzle-orm');
+const { eq, and, inArray } = await import('drizzle-orm');
 
 const AUTH_SECRET = getServerConfig().authSecret || 'test-secret';
 const db = getDb();
@@ -151,8 +151,11 @@ describe('isolamento por organização (multitenancy)', () => {
     const rA = await call(await import('../app/api/extension/sessions/route').then((m) => m.GET(req('GET', '/api/extension/sessions', tokenA) as never)));
     const dA = (await rA.json()) as { sessions: unknown[] };
     expect(dA.sessions.length).toBe(1); // só a sessão da própria orgA
-    // Nenhuma sessão cruza: contagem total de sessões ativas das duas orgs = 2.
-    const all = await db.select().from(schema.extensionSessions).where(eq(schema.extensionSessions.status, 'active'));
+    // Nenhuma sessão cruza: contagem de sessões ativas das duas orgs conhecidas = 2.
+    const all = await db
+      .select()
+      .from(schema.extensionSessions)
+      .where(and(eq(schema.extensionSessions.status, 'active'), inArray(schema.extensionSessions.organizationId, [orgA, orgB])));
     expect(all.length).toBe(2);
   });
 

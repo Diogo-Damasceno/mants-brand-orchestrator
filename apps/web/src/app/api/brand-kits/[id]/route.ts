@@ -45,6 +45,14 @@ export async function PATCH(req: NextRequest) {
       .where(and(eq(schema.brandKits.id, id), eq(schema.brandKits.organizationId, ctx.organizationId)));
     if (!current) throw new HttpError(404, 'Brand Kit não encontrado.');
     const { colors, fonts, rules, ...rest } = body;
+    // Impede alterar clientId para cliente de outra organização (404).
+    if (rest.clientId && rest.clientId !== current.clientId) {
+      const [client] = await db
+        .select()
+        .from(schema.clients)
+        .where(and(eq(schema.clients.id, rest.clientId), eq(schema.clients.organizationId, ctx.organizationId), isNull(schema.clients.deletedAt)));
+      if (!client) throw new HttpError(404, 'Cliente não encontrado nesta organização.');
+    }
     await db
       .update(schema.brandKits)
       .set({ ...rest, version: current.version + 1, updatedAt: new Date() })
@@ -98,7 +106,7 @@ export async function PATCH(req: NextRequest) {
           ruleText: (r as { text?: string; ruleText?: string }).ruleText ?? (r as { text?: string }).text ?? '',
         });
     }
-    return json({ ok: true, version: current.version + 1 });
+    return json({ ok: true, version: current.version + 1, clientId: rest.clientId ?? current.clientId ?? null });
   } catch (e) {
     return errorResponse(e);
   }

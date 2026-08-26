@@ -99,6 +99,9 @@ export const brandKitCreateSchema = z.object({
   legalInfo: z.string().max(2000).optional(),
   productsAndServices: z.string().max(2000).optional(),
   approvedCtas: z.array(z.string()).max(40),
+  // Vinculação ao cliente da mesma organização. Permite null/ausente para
+  // Brand Kits legados (backfill posterior). Novos Brand Kits devem informar.
+  clientId: uuid.nullable().optional(),
 });
 
 // ----- Campaign -----
