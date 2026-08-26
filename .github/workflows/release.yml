@@ -54,6 +54,7 @@ jobs:
           docker exec mants-postgres pg_isready -U mants -d mants_db >/dev/null 2>&1 || { docker logs mants-postgres; exit 1; }
       - name: MinIO (container dedicado, imagem fixa)
         run: |
+          docker pull minio/mc:RELEASE.2024-11-21T17-21-54Z
           docker run -d --name mants-minio -p 9000:9000 -p 9001:9001 \
             -e MINIO_ROOT_USER=mants_minio -e MINIO_ROOT_PASSWORD=mants_minio_secret \
             minio/minio:RELEASE.2024-12-18T13-15-44Z server /data --console-address :9001
@@ -63,10 +64,22 @@ jobs:
         run: |
           docker exec mants-postgres psql -U mants -d mants_db -tc "SELECT 1 FROM pg_database WHERE datname='mants_test'" | grep -q 1 || \
           docker exec mants-postgres psql -U mants -d mants_db -c "CREATE DATABASE mants_test"
-      - name: Cria bucket privado (mc separado)
+      - name: Cria bucket privado
         run: |
-          docker run --rm --network host -e MC_HOST_local=http://mants_minio:mants_minio_secret@localhost:9000 minio/mc:RELEASE.2024-11-21T17-21-54Z mb --ignore-existing local/mants-private
-          docker run --rm --network host -e MC_HOST_local=http://mants_minio:mants_minio_secret@localhost:9000 minio/mc:RELEASE.2024-11-21T17-21-54Z anonymous set local/mants-private none
+          # Espera MinIO realmente pronto (não só health, mas aceitando requests).
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:9000/minio/health/ready >/dev/null 2>&1 && break
+            sleep 2
+          done
+          MC="docker run --rm --network host -e MC_HOST_local=http://mants_minio:mants_minio_secret@localhost:9000 minio/mc:RELEASE.2024-11-21T17-21-54Z"
+          # cria (idempotente via retry) e torna privado
+          for i in $(seq 1 10); do
+            $MC mb --ignore-existing local/mants-private && \
+            $MC anonymous set local/mants-private none && break
+            sleep 3
+          done
+          # confirma
+          $MC ls local/ | grep -q mants-private || { echo "bucket não criado"; docker logs mants-minio; exit 1; }
       - name: Migrations
         run: pnpm db:migrate
       - name: Unitários
