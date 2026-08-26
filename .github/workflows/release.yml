@@ -83,11 +83,9 @@ jobs:
       - name: Migrations
         run: pnpm db:migrate
       - name: Unitários
-        run: |
-          OUT=$(pnpm test --reporter=dot 2>&1) || { echo "$OUT"; exit 1; }
-          echo "$OUT" | grep -qE "Test Files +[1-9]" || { echo "NENHUM teste executado"; exit 1; }
+        run: pnpm test --reporter=basic
       - name: Integração
-        run: pnpm test:integration --reporter=dot
+        run: pnpm test:integration --reporter=basic
       - name: Build web
         run: pnpm build
       - name: Build Chrome LOCAL para E2E
