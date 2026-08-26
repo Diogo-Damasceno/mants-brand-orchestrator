@@ -36,6 +36,12 @@ function hashMatches(storedHash: string | null | undefined, plainValue: string |
  */
 export async function POST(req: NextRequest) {
   try {
+    // requestId para correlação no audit log (não vaza dados sensíveis).
+    const requestId =
+      req.headers.get('x-request-id') ??
+      req.headers.get('x-correlation-id') ??
+      crypto.randomUUID();
+
     const body = await req.json().catch(() => ({}));
     const code = String(body.code ?? '');
     const cancelSecret = String(body.cancelSecret ?? '');
@@ -85,12 +91,24 @@ export async function POST(req: NextRequest) {
         .where(eq(schema.authCodes.code, code));
 
       await tx.insert(schema.auditLogs).values({
-        organizationId: row.organizationId ?? '00000000-0000-0000-0000-000000000000',
-        actorId: row.userId ?? '00000000-0000-0000-0000-000000000000',
+        // Antes da autorização, organizationId/userId são nulos. Os campos de
+        // auditoria são nullable, portanto gravamos null (nunca UUID zerado, que
+        // violaria as foreign keys de audit_logs e causaria rollback da transação).
+        organizationId: row.organizationId ?? null,
+        actorId: row.userId ?? null,
         action: 'extension_auth_cancel',
         entity: 'auth_code',
         entityId: null,
-        detail: { codeMasked: maskCode(row.code), deviceId: row.deviceId, via: isPublicCancel ? 'cancel_secret' : 'web_session' },
+        requestId,
+        detail: {
+          via: isPublicCancel ? 'cancel_secret' : 'web_session',
+          codeMasked: maskCode(row.code),
+          deviceId: row.deviceId,
+          browser: row.browser,
+          reason: 'user_cancelled',
+          timestamp: new Date().toISOString(),
+          requestId,
+        },
       });
 
       return { ok: true, cancelled: true, audit: true };

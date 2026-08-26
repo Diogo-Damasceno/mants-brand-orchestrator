@@ -7,7 +7,7 @@ import {
   logout,
   getAuthStatus,
   getPublicConfig,
-  getSessionSafe,
+  validateExtensionSession,
 } from '../modules/extension-client';
 import type { AuthStatus } from '../modules/messages';
 
@@ -59,16 +59,40 @@ export default definePopup(() => {
     const s = await getSession<Session>();
     setSession(s);
     if (s?.token) {
-      // Valida no backend (revogação/expiração/organização); não confia só no storage.
-      try {
-        await getSessionSafe();
-      } catch {
-        // 401 do backend: sessão inválida.
+      // 1) Expiração local (rápida, sem rede).
+      const locallyExpired = typeof s.expiresAt === 'number' && Date.now() > s.expiresAt;
+      if (locallyExpired) {
         await clearSession();
         setSession(null);
         setExpired(true);
         broadcastExpired();
+        const st = await getAuthStatus();
+        applyStatus(st);
         return;
+      }
+      // 2) Validação REAL no backend (assinatura, expiração, revogação, org, membership).
+      try {
+        const v = await validateExtensionSession(s.token);
+        if (!v.valid) {
+          if (v.networkError) {
+            // Falha de rede temporária: NÃO apaga a sessão. Mantém o usuário logado
+            // off-line; o popup tentará revalidar na próxima abertura.
+            setError('API indisponível. Sessão mantida localmente.');
+            const st = await getAuthStatus();
+            applyStatus(st);
+            return;
+          }
+          // Sessão inválida/expirada/revogada: limpa e oferece novo login.
+          await clearSession();
+          setSession(null);
+          setExpired(true);
+          broadcastExpired();
+          return;
+        }
+        // 3) Atualiza estado de validade com dados do servidor.
+        setSession((prev) => (prev ? { ...prev, expiresAt: v.expiresAt ?? prev.expiresAt } : prev));
+      } catch {
+        setError('API indisponível. Sessão mantida localmente.');
       }
     }
     const st = await getAuthStatus();

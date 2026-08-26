@@ -6,9 +6,10 @@ import {
   extPost,
   extPatch,
   getPublicConfig,
-  getSessionSafe,
+  validateExtensionSession,
 } from '../modules/extension-client';
 import browser from 'webextension-polyfill';
+import { filterBrandKitsByClient } from '../modules/sidepanel-filter';
 
 interface Option {
   id: string;
@@ -60,12 +61,20 @@ export default defineSidepanel(() => {
           return;
         }
         setSession(s);
-        // Valida a sessão no backend (revogação/expiração/organização).
+        // Valida a sessão no backend (revogação/expiração/organização/membership).
         try {
-          await getSessionSafe();
+          const v = await validateExtensionSession(s.token);
+          if (!v.valid) {
+            if (v.networkError) {
+              // Indisponibilidade: mantém a sessão local; apenas informa.
+              setStatus('API indisponível. Sessão mantida localmente.');
+            } else {
+              setStatus('Sessão inválida ou expirada. Faça login novamente.');
+              return;
+            }
+          }
         } catch {
-          setStatus('Sessão inválida ou expirada. Faça login novamente.');
-          return;
+          setStatus('API indisponível. Sessão mantida localmente.');
         }
         // Configuração pública (sem token); verifica feature flag remota.
         const cfg = await getPublicConfig<{ featureChatgptAssistedInsertion: boolean; extensionMinVersion: string }>();
@@ -100,12 +109,12 @@ export default defineSidepanel(() => {
       setError(describeError(e));
     }
   }
-  async function loadBrandKits(t: string) {
+  async function loadBrandKits(t: string, clientId?: string) {
     try {
       const d = await extGet<{ brandKits: Option[] }>('/api/brand-kits', t);
       const all = d.brandKits ?? [];
-      // Filtra pelo cliente selecionado (isolamento por cliente).
-      setBrandKits(client ? all.filter((b) => b.clientId === client) : all);
+      // Filtra pelo cliente (isolamento por cliente). Confirma clientId real na resposta.
+      setBrandKits(filterBrandKitsByClient(all, clientId));
     } catch (e) {
       setError(describeError(e));
     }
@@ -277,7 +286,7 @@ export default defineSidepanel(() => {
           setPrompt('');
           setEdited('');
           setPromptId('');
-          if (session) void loadBrandKits(session.token);
+          if (session) void loadBrandKits(session.token, v);
         }} style={{ width: '100%' }}>
           <option value="">— selecione —</option>
           {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}

@@ -9,6 +9,7 @@
     "lint": "turbo lint",
     "typecheck": "turbo typecheck",
     "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "extension:dev": "pnpm --filter @mants/extension dev",

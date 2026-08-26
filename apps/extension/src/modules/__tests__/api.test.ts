@@ -21,16 +21,20 @@ describe('validateApiOrigin', () => {
     expect(() => validateApiOrigin('ftp://api.mants.company')).toThrow();
   });
 
+  it('rejeita chatgpt.com como API da Mants', () => {
+    expect(() => validateApiOrigin('https://chatgpt.com')).toThrow();
+  });
+
   it('permite http apenas para localhost em desenvolvimento', () => {
-    vi.stubEnv('NODE_ENV', 'development');
+    vi.stubGlobal('__MANTS_BUILD_MODE__', 'development');
     expect(validateApiOrigin('http://localhost:3000')).toBe('http://localhost:3000');
     expect(() => validateApiOrigin('http://evil.com')).toThrow();
-    vi.stubEnv('NODE_ENV', 'test');
+    vi.unstubAllGlobals();
   });
 
   it('bloqueia http (mesmo localhost) em produção', () => {
-    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubGlobal('__MANTS_BUILD_MODE__', 'production');
     expect(() => validateApiOrigin('http://localhost:3000')).toThrow(/produção/);
-    vi.stubEnv('NODE_ENV', 'test');
+    vi.unstubAllGlobals();
   });
 });

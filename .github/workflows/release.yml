@@ -1,0 +1,117 @@
+name: release
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: mants
+          POSTGRES_PASSWORD: mants_password
+          POSTGRES_DB: mants_db
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U mants"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      minio:
+        image: minio/minio:latest
+        env:
+          MINIO_ROOT_USER: mants_minio
+          MINIO_ROOT_PASSWORD: mants_minio_secret
+        ports: ['9000:9000']
+        options: >-
+          --health-cmd "mc alias set local http://localhost:9000 mants_minio mants_minio_secret && mc mb --ignore-existing local/mants-private"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: corepack enable
+      - run: corepack prepare pnpm@9.12.3 --activate
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Instala (frozen lockfile)
+        run: pnpm install --frozen-lockfile
+      - name: Falha se nenhum teste rodou
+        run: |
+          OUT=$(pnpm test --reporter=dot 2>&1) || { echo "$OUT"; exit 1; }
+          echo "$OUT" | grep -qE "Test Files +[1-9]" || { echo "NENHUM teste executado"; exit 1; }
+      - name: Lint
+        run: pnpm lint
+      - name: Typecheck (web)
+        run: pnpm --filter @mants/web typecheck
+      - name: Integração (Postgres + MinIO obrigatórios)
+        env:
+          DATABASE_URL: postgresql://mants:mants_password@localhost:5432/mants_test
+          STORAGE_ENDPOINT: http://localhost:9000
+          STORAGE_ACCESS_KEY_ID: mants_minio
+          STORAGE_SECRET_ACCESS_KEY: mants_minio_secret
+          STORAGE_BUCKET: mants-private
+        run: |
+          psql "$DATABASE_URL" -c "CREATE DATABASE mants_test;" || true
+          pnpm test:integration --reporter=dot
+      - name: Build web
+        run: pnpm build
+      - name: Build extensão (Chrome/Edge/Firefox) — falha se não buildar
+        env:
+          BUILD_MODE: production
+          API_BASE: https://api.mants.company
+          FIREFOX_GECKO_ID: mants-brand-orchestrator@mants.company
+        run: |
+          pnpm extension:build:chrome
+          pnpm extension:build:edge
+          pnpm extension:build:firefox
+          test -d apps/extension/.output/chrome-mv3 || { echo "Build Chrome ausente"; exit 1; }
+          test -d apps/extension/.output/edge-mv3 || { echo "Build Edge ausente"; exit 1; }
+          test -d apps/extension/.output/firefox-mv3 || { echo "Build Firefox ausente"; exit 1; }
+      - name: E2E (browser obrigatório; falha claramente se ausente)
+        env:
+          APP_URL: http://localhost:3000
+        run: |
+          which chromium chromium-browser google-chrome chrome 2>/dev/null || npx playwright install chromium
+          pnpm build
+          (pnpm start &) || true
+          pnpm test:e2e || { echo "E2E ausente ou falhou — job falha"; exit 1; }
+      - name: ZIP (falha se ausente)
+        run: |
+          pnpm extension:zip:chrome
+          pnpm extension:zip:edge
+          pnpm extension:zip:firefox
+          test -f apps/extension/.output/chrome-mv3.zip || { echo "ZIP Chrome ausente"; exit 1; }
+          test -f apps/extension/.output/edge-mv3.zip || { echo "ZIP Edge ausente"; exit 1; }
+          test -f apps/extension/.output/firefox-mv3.zip || { echo "ZIP Firefox ausente"; exit 1; }
+      - name: Sem localhost nos builds de produção
+        run: |
+          rg -n "localhost" apps/extension/.output || true
+          if rg -n "localhost" apps/extension/.output/chrome-mv3 apps/extension/.output/edge-mv3 apps/extension/.output/firefox-mv3; then
+            echo "localhost encontrado em build de produção"; exit 1;
+          fi
+
+  optional:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - run: corepack enable && corepack prepare pnpm@9.12.3 --activate
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - name: Testes opcionais (não bloqueiam release)
+        run: pnpm test:optional --reporter=dot || echo "::warning::testes opcionais falharam (não bloqueiam)"

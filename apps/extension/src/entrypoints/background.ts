@@ -25,9 +25,13 @@ import {
   clearPendingFlow,
   saveAuthStatus,
   getAuthStatus,
-  savePollInterval,
-  getPollInterval,
 } from '../modules/flow-state';
+import {
+  scheduleAlarm,
+  clearAlarm,
+  ALARM_NAME,
+  MIN_POLL_INTERVAL_MS,
+} from '../modules/poll-alarm';
 import type {
   ExtensionMessage,
   AuthStatus,
@@ -46,10 +50,8 @@ import type {
 // A recuperação após suspensão do SW usa browser.alarms (não setTimeout).
 
 const FLOW_TTL_MS = 10 * 60_000; // 10 minutos (espelha o backend)
-const ALARM_NAME = 'mants_pkce_poll';
-const POLL_INTERVAL_MS = 2_000; // intervalo base do alarme (backoff aplicado por contador)
-const POLL_BACKOFF_STEP = 1_500;
-const POLL_MAX_INTERVAL_MS = 15_000;
+// POLL_BACKOFF_STEP e POLL_MAX_INTERVAL_MS removidos: não fazemos mais backoff de
+// poucos segundos recriando alarms abaixo do mínimo. O piso durável vem de poll-alarm.
 
 function broadcast(status: AuthStatus): void {
   void saveAuthStatus(status);
@@ -121,24 +123,14 @@ async function pollAndAdvance(flow: PendingFlow): Promise<number> {
       return 0;
     }
   } catch {
-    // Falha de rede transitória: mantém o alarme (backoff no próximo tick).
+    // Falha de rede transitória: mantém o alarme durável (próximo tick em >=30s).
   }
-  return POLL_INTERVAL_MS;
+  return MIN_POLL_INTERVAL_MS;
 }
 
-/** Agenda o alarme de polling com intervalo crescente (backoff), sem duplicar. */
-async function scheduleAlarm(interval: number): void {
-  await clearAlarm();
-  await savePollInterval(interval);
-  await browser.alarms.create(ALARM_NAME, { periodInMinutes: interval / 60_000 });
-}
-
-async function clearAlarm(): Promise<void> {
-  try {
-    await browser.alarms.clear(ALARM_NAME);
-  } catch {
-    /* ignore */
-  }
+/** Agenda o alarme de polling durável com intervalo seguro (>= 30s). */
+async function schedulePollAlarm(): Promise<void> {
+  await scheduleAlarm(MIN_POLL_INTERVAL_MS);
 }
 
 async function startFlow(): Promise<StartAuthResult> {
@@ -191,8 +183,10 @@ async function startFlow(): Promise<StartAuthResult> {
       url: `${origin}/extension/authorize?code=${encodeURIComponent(code)}`,
     });
 
-    // Inicia o polling durável via alarme.
-    await scheduleAlarm(POLL_INTERVAL_MS);
+    // Polling imediato (rápido) uma vez, logo após criar o fluxo.
+    void pollAndAdvance(flow).catch(() => undefined);
+    // Inicia o polling durável via alarme (intervalo >= 30s).
+    await schedulePollAlarm();
     return { ok: true };
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'Falha ao iniciar login.';
@@ -249,7 +243,9 @@ async function recoverPendingFlow(): Promise<void> {
     return;
   }
   broadcast({ phase: 'awaiting_user', code: flow.code, error: null });
-  await scheduleAlarm(POLL_INTERVAL_MS);
+  // Polling imediato ao recuperar o fluxo após suspensão do SW.
+  void pollAndAdvance(flow).catch(() => undefined);
+  await schedulePollAlarm();
 }
 
 /** Localiza a aba ativa do chatgpt.com e entrega a mensagem ao content script. */
@@ -308,13 +304,9 @@ export default defineBackground(() => {
         await clearAlarm();
         return;
       }
-      const prev = await getPollInterval();
-      const next = await pollAndAdvance(flow);
-      if (next > 0) {
-        // Backoff progressivo persistido (sobrevive à suspensão do SW).
-        const nextInterval = Math.min(prev + POLL_BACKOFF_STEP, POLL_MAX_INTERVAL_MS);
-        await scheduleAlarm(nextInterval);
-      }
+      // O alarme já é durável no intervalo seguro; apenas avança o estado.
+      // Não recria alarms abaixo do mínimo para simular backoff.
+      await pollAndAdvance(flow);
     })();
   });
 

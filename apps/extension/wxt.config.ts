@@ -3,22 +3,22 @@ import { defineConfig } from 'wxt';
 /**
  * WXT — builds multi-navegador.
  *
- * Scripts (package.json + root):
- *   wxt build -b chrome   / -b edge   / -b firefox
- *   wxt zip   -b chrome   / -b edge   / -b firefox
- *
  * Política de ambiente:
- *  - A origem da API vem de API_BASE (env). NÃO há fallback para http://localhost:3000
- *    em produção: se API_BASE ausente, o build falha (define vazio só é aceito em dev).
+ *  - A origem da API vem de API_BASE (env), injetada EXCLUSIVAMENTE via define
+ *    __API_BASE__. NÃO há fallback para http://localhost:3000 em produção: se
+ *    API_BASE ausente, o build falha (define vazio só é aceito em dev).
+ *  - O modo de build (production/dev) vem de BUILD_MODE, injetado via
+ *    __MANTS_BUILD_MODE__. Usado em runtime para proibir localhost HTTP em
+ *    produção (process.env não existe no navegador).
  *  - host_permissions usa a origem real (nunca placeholder SEU_DOMINIO_DA_API).
- *  - Firefox: usa sidebar_action + browser_specific_settings.gecko.id (sem sidePanel).
+ *  - Firefox: usa sidebar_action + browser_specific_settings.gecko.id.
  *  - Chrome/Edge: Manifest V3 com sidePanel + service worker.
  */
 
 const API_BASE = process.env.API_BASE ?? process.env.API_BASE_URL ?? 'http://localhost:3000';
-const IS_PROD = process.env.NODE_ENV === 'production';
+const BUILD_MODE = process.env.BUILD_MODE ?? process.env.NODE_ENV ?? 'development';
 
-if (IS_PROD && API_BASE === 'http://localhost:3000') {
+if (BUILD_MODE === 'production' && API_BASE === 'http://localhost:3000') {
   throw new Error(
     'API_BASE não pode ser http://localhost:3000 em produção. Defina a origem real da API.',
   );
@@ -29,10 +29,11 @@ const GECKO_ID = process.env.FIREFOX_GECKO_ID ?? 'mants-brand-orchestrator@mants
 export default defineConfig({
   srcDir: './src',
   modules: ['@wxt-dev/module-react'],
-  // Injeta a origem real da API no bundle (substitui __API_BASE__ no código).
+  // Injeta a origem real da API e o modo de build no bundle (substitui os defines).
   vite: () => ({
     define: {
       __API_BASE__: JSON.stringify(API_BASE),
+      __MANTS_BUILD_MODE__: JSON.stringify(BUILD_MODE),
     },
   }),
   manifest: (env) => {
@@ -43,7 +44,8 @@ export default defineConfig({
         'Painel lateral que gera prompts e Pacotes Criativos para sua conta compatível do ChatGPT.',
       version: '0.1.0',
       action: { default_title: 'Mants Brand Orchestrator' },
-      host_permissions: ['https://chatgpt.com/*', `${API_BASE}/*`],
+      // host_permissions DEVE corresponder à origem real (API_BASE), nunca ChatGPT.
+      host_permissions: [`${API_BASE}/*`],
     };
 
     if (browser === 'firefox') {

@@ -73,3 +73,58 @@ export async function getSessionSafe<T = unknown>(): Promise<T | null> {
   const r = await send<{ session: T | null }>({ type: 'GET_SESSION' });
   return r.session;
 }
+
+/** Resultado estruturado da validação de sessão no backend. */
+export interface ExtensionSessionValidation {
+  valid: boolean;
+  reason?: string;
+  userId?: string;
+  organizationId?: string;
+  roles?: string[];
+  status?: string;
+  expiresAt?: number;
+  /** true quando a falha foi de rede/indisponibilidade, NÃO de sessão inválida. */
+  networkError?: boolean;
+}
+
+/**
+ * Valida a sessão da extensão contra o backend REAL (GET /api/extension/session).
+ *
+ * Substitui a antiga `getSessionSafe()`, que apenas devolvia a sessão local sem
+ * qualquer verificação. Aqui conferimos assinatura, expiração, revogação,
+ * usuário, organização e membership no servidor.
+ *
+ * Importante: erro de rede (fetch falha / 5xx) NÃO significa sessão inválida.
+ * O chamador deve distinguir `networkError` de sessão inválida — não apague uma
+ * sessão válida só porque o usuário ficou offline.
+ */
+export async function validateExtensionSession(token: string): Promise<ExtensionSessionValidation> {
+  try {
+    const res = await fetch(`${getApiBase()}/api/extension/session`, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) {
+      const data = (await res.json().catch(() => ({}))) as { valid?: boolean; reason?: string };
+      return {
+        valid: false,
+        reason: data.reason ?? `Validação falhou (HTTP ${res.status}).`,
+        networkError: res.status >= 500,
+      };
+    }
+    const data = (await res.json()) as ExtensionSessionValidation;
+    return {
+      valid: Boolean(data.valid),
+      reason: data.reason,
+      userId: data.userId,
+      organizationId: data.organizationId,
+      roles: data.roles,
+      status: data.status,
+      expiresAt: data.expiresAt,
+      networkError: false,
+    };
+  } catch {
+    // Falha de rede/indisponibilidade: NÃO considerar sessão inválida.
+    return { valid: false, reason: 'API indisponível.', networkError: true };
+  }
+}

@@ -8,18 +8,27 @@
 import type { CancelAuthPayload } from './messages';
 
 function resolveApiBase(): string {
+  // A origem da API vem EXCLUSIVAMENTE do valor injetado pelo build (__API_BASE__).
+  // Não há fallback para host_permissions (o primeiro é chatgpt.com e jamais deve
+  // ser interpretado como servidor da Mants). Se ausente, falha explicitamente.
   const fromDefine = typeof __API_BASE__ !== 'undefined' ? __API_BASE__ : '';
-  const fromManifest =
-    typeof browser !== 'undefined' && browser.runtime?.getManifest?.()?.host_permissions?.[0]
-      ? new URL(browser.runtime.getManifest().host_permissions[0]).origin
-      : '';
-  const raw = (fromDefine || fromManifest || '').trim();
-  if (!raw) {
+  if (!fromDefine || fromDefine.trim() === '') {
     throw new Error(
-      'API_BASE não configurado. Defina a origem da API no build (define __API_BASE__ ou host_permissions).',
+      'API_BASE não configurado. Defina a origem real da API no build (define __API_BASE__). ' +
+        'Não é aceito placeholder nem fallback para ChatGPT.',
     );
   }
-  return validateApiOrigin(raw);
+  return validateApiOrigin(fromDefine);
+}
+
+/**
+ * Detecta modo de build (produção vs desenvolvimento).
+ * NÃO depende de process.env.NODE_ENV em runtime de extensão (process pode não
+ * existir no navegador). Usa __MANTS_BUILD_MODE__ injetado pelo WXT/Vite.
+ */
+export function isProductionBuild(): boolean {
+  const mode = typeof __MANTS_BUILD_MODE__ !== 'undefined' ? __MANTS_BUILD_MODE__ : '';
+  return mode === 'production';
 }
 
 /** Valida e normaliza a origem da API. Lança em produção se inválida. */
@@ -34,17 +43,20 @@ export function validateApiOrigin(raw: string): string {
     throw new Error(`API_BASE deve ser uma origem pura (sem path/query/fragment): ${raw}`);
   }
   const isLocalhost = url.hostname === 'localhost' || url.hostname === '127.0.0.1';
-  const isDev =
-    typeof process !== 'undefined' && process.env?.NODE_ENV === 'development';
   if (url.protocol === 'http:') {
     if (!isLocalhost) {
       throw new Error(`API_BASE HTTP só é permitido para localhost (dev): ${raw}`);
     }
-    if (!isDev && typeof process !== 'undefined') {
+    // Em produção, localhost HTTP é inaceitável (exige HTTPS).
+    if (isProductionBuild()) {
       throw new Error(`API_BASE HTTP não é permitido em produção: ${raw}`);
     }
   } else if (url.protocol !== 'https:') {
     throw new Error(`API_BASE deve usar http(s): ${raw}`);
+  }
+  // Nenhum bundle de produção pode apontar para ChatGPT como API da Mants.
+  if (url.hostname === 'chatgpt.com') {
+    throw new Error('API_BASE não pode ser chatgpt.com (não é a API da Mants).');
   }
   return url.origin;
 }
