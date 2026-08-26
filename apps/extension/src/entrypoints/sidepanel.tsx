@@ -1,7 +1,12 @@
 import { useState, useEffect } from 'react';
 import { getSession } from '../modules/storage';
-import { apiGet, apiPost, getApiBase } from '../modules/api';
-import { ChatSurfaceAdapter } from '../modules/chat-surface';
+import { getApiBase, registerPromptUsage, downloadPackageBlob, type Session } from '../modules/api';
+import {
+  extGet,
+  extPost,
+  extPatch,
+} from '../modules/extension-client';
+import browser from 'webextension-polyfill';
 
 interface Option {
   id: string;
@@ -18,8 +23,7 @@ interface PromptResult {
 
 export default defineSidepanel(() => {
   const [status, setStatus] = useState('Carregando…');
-  const [token, setToken] = useState('');
-  const [org, setOrg] = useState('');
+  const [session, setSession] = useState<Session | null>(null);
   const [assistedEnabled, setAssistedEnabled] = useState(false);
 
   const [clients, setClients] = useState<Option[]>([]);
@@ -44,30 +48,32 @@ export default defineSidepanel(() => {
   const [edited, setEdited] = useState('');
 
   useEffect(() => {
-    getSession<{ token: string; organizationId: string }>()
-      .then(async (s) => {
+    void (async () => {
+      try {
+        const s = await getSession<Session>();
         if (!s) {
           setStatus('Não autenticado. Faça login na extensão.');
           return;
         }
-        setToken(s.token);
-        setOrg(s.organizationId);
-        try {
-          const cfg = await apiGet<{ featureChatgptAssistedInsertion: boolean }>('/api/extension/config', s.token);
-          setAssistedEnabled(cfg.featureChatgptAssistedInsertion);
-        } catch {
-          /* padrão desligado */
-        }
+        setSession(s);
+        // Verifica feature flag remota e versão mínima.
+        const cfg = await extGet<{ featureChatgptAssistedInsertion: boolean; extensionMinVersion: string }>(
+          '/api/extension/config',
+          s.token,
+        );
+        setAssistedEnabled(cfg.featureChatgptAssistedInsertion);
         await loadClients(s.token);
         await loadBrandKits(s.token);
         setStatus('Pronto.');
-      })
-      .catch(() => setStatus('Falha ao carregar sessão.'));
+      } catch (e) {
+        setStatus(e instanceof Error ? e.message : 'Falha ao carregar sessão.');
+      }
+    })();
   }, []);
 
   async function loadClients(t: string) {
     try {
-      const d = await apiGet<{ clients: Option[] }>('/api/clients', t);
+      const d = await extGet<{ clients: Option[] }>('/api/clients', t);
       setClients(d.clients ?? []);
     } catch {
       /* silencioso */
@@ -75,7 +81,7 @@ export default defineSidepanel(() => {
   }
   async function loadBrandKits(t: string) {
     try {
-      const d = await apiGet<{ brandKits: Option[] }>('/api/brand-kits', t);
+      const d = await extGet<{ brandKits: Option[] }>('/api/brand-kits', t);
       setBrandKits(d.brandKits ?? []);
     } catch {
       /* silencioso */
@@ -83,7 +89,7 @@ export default defineSidepanel(() => {
   }
   async function loadCampaigns(t: string, bk: string) {
     try {
-      const d = await apiGet<{ campaigns: Option[] }>(`/api/campaigns?brandKitId=${bk}`, t);
+      const d = await extGet<{ campaigns: Option[] }>(`/api/campaigns?brandKitId=${bk}`, t);
       setCampaigns(d.campaigns ?? []);
     } catch {
       /* silencioso */
@@ -91,7 +97,7 @@ export default defineSidepanel(() => {
   }
   async function loadAssets(t: string, bk: string) {
     try {
-      const d = await apiGet<{ assets: AssetOption[] }>(`/api/assets?brandKitId=${bk}`, t);
+      const d = await extGet<{ assets: AssetOption[] }>(`/api/assets?brandKitId=${bk}`, t);
       setAssets(d.assets ?? []);
     } catch {
       /* silencioso */
@@ -103,25 +109,29 @@ export default defineSidepanel(() => {
   }
 
   async function onGenerate() {
-    if (!token) return setStatus('Não autenticado.');
+    if (!session) return setStatus('Não autenticado.');
     if (!brandKit) return setStatus('Selecione um Brand Kit.');
     setStatus('Gerando…');
     try {
-      const d = await apiPost<PromptResult>('/api/prompts/generate', token, {
-        brandKitId: brandKit,
-        campaignId: campaign || undefined,
-        templateKind: format,
-        promptMode: mode,
-        objective,
-        productOrService: product,
-        audience,
-        offer,
-        cta,
-        mandatoryContent: mandatory.split('\n').filter(Boolean),
-        prohibitedContent: prohibited.split('\n').filter(Boolean),
-        selectedAssetIds: selectedAssets,
-        variations: 1,
-      });
+      const d = await extPost<PromptResult>(
+        '/api/prompts/generate',
+        session.token,
+        {
+          brandKitId: brandKit,
+          campaignId: campaign || undefined,
+          templateKind: format,
+          promptMode: mode,
+          objective,
+          productOrService: product,
+          audience,
+          offer,
+          cta,
+          mandatoryContent: mandatory.split('\n').filter(Boolean),
+          prohibitedContent: prohibited.split('\n').filter(Boolean),
+          selectedAssetIds: selectedAssets,
+          variations: 1,
+        },
+      );
       setPromptId(d.id);
       setPrompt(d.prompt.originalText);
       setEdited(d.prompt.originalText);
@@ -132,9 +142,10 @@ export default defineSidepanel(() => {
   }
 
   async function onSaveEdit() {
-    if (!token || !promptId) return setStatus('Gere um prompt primeiro.');
+    if (!session || !promptId) return setStatus('Gere um prompt primeiro.');
     try {
-      await apiPost('/api/prompts/' + promptId, token, { promptId, editedText: edited });
+      // Contrato real da API: PATCH /api/prompts/:id (validado por schema).
+      await extPatch(`/api/prompts/${promptId}`, session.token, { promptId, editedText: edited });
       setStatus('Edição salva.');
     } catch (e) {
       setStatus(e instanceof Error ? e.message : 'Falha ao salvar.');
@@ -155,22 +166,35 @@ export default defineSidepanel(() => {
       setStatus('Inserção assistida desativada. Use "Copiar prompt".');
       return;
     }
-    const r = await ChatSurfaceAdapter.insertText(edited || prompt);
-    setStatus(r.ok ? 'Inserido no ChatGPT.' : `Falha: ${r.reason}. Use "Copiar prompt".`);
+    // O side panel NÃO está no DOM do ChatGPT: encaminha ao background, que
+    // localiza a aba ativa e manda ao content script (INSERT_TEXT).
+    const r = await browser.runtime.sendMessage({ type: 'INSERT_TEXT', text: edited || prompt });
+    const res = r as { ok: boolean; reason?: string } | undefined;
+    if (res?.ok) setStatus('Inserido no ChatGPT.');
+    else setStatus(`Falha: ${res?.reason ?? 'desconhecido'}. Use "Copiar prompt".`);
   }
 
   async function onDownload() {
-    if (!token || !promptId || !brandKit) return setStatus('Gere um prompt e selecione o Brand Kit.');
+    if (!session || !promptId || !brandKit) return setStatus('Gere um prompt e selecione o Brand Kit.');
     setStatus('Gerando pacote…');
     try {
-      const d = await apiPost<{ id: string }>('/api/packages', token, {
+      const d = await extPost<{ id: string }>('/api/packages', session.token, {
         brandKitId: brandKit,
         campaignId: campaign || undefined,
         promptId,
         assetIds: selectedAssets,
       });
-      browser.tabs.create({ url: `${getApiBase()}/api/packages/${d.id}/download` });
-      setStatus('Pacote gerado. Download iniciado.');
+      // Download autenticado via fetch + Blob (Bearer enviado, sem token na URL).
+      const blob = await downloadPackageBlob(d.id, session.token);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `mants-pacote-${d.id.slice(0, 8)}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setStatus('Pacote gerado e baixado.');
     } catch (e) {
       setStatus(e instanceof Error ? e.message : 'Falha ao gerar pacote.');
     }
@@ -181,23 +205,25 @@ export default defineSidepanel(() => {
   }
 
   async function onRegisterUsed() {
-    if (!token || !promptId) return setStatus('Gere um prompt primeiro.');
+    if (!session || !promptId) return setStatus('Gere um prompt primeiro.');
     try {
-      await apiPost('/api/prompts/' + promptId + '/usage', token, {}).catch(() => undefined);
+      await registerPromptUsage(promptId, session.token);
       setStatus('Uso registrado.');
-    } catch {
-      setStatus('Uso registrado (local).');
+    } catch (e) {
+      // Não afirma "Uso registrado" quando falha.
+      setStatus(e instanceof Error ? e.message : 'Falha ao registrar uso.');
     }
   }
 
   function onImportResult() {
+    // Rota real existente no site (apps/web/src/app/resultados/importar/page.tsx).
     browser.tabs.create({ url: `${getApiBase()}/resultados/importar` });
   }
 
   return (
     <div style={{ padding: 12, fontFamily: 'system-ui', fontSize: 12, maxWidth: 360 }}>
       <h1 style={{ fontSize: 14, fontWeight: 700 }}>Mants — Painel lateral</h1>
-      <p style={{ color: '#666' }}>Org: {org || '—'}</p>
+      <p style={{ color: '#666' }}>Org: {session?.organizationId || '—'}</p>
 
       <label>Cliente
         <select value={client} onChange={(e) => setClient(e.target.value)} style={{ width: '100%' }}>
@@ -206,7 +232,7 @@ export default defineSidepanel(() => {
         </select>
       </label>
       <label>Brand Kit
-        <select value={brandKit} onChange={(e) => { setBrandKit(e.target.value); if (e.target.value) { loadCampaigns(token, e.target.value); loadAssets(token, e.target.value); } }} style={{ width: '100%' }}>
+        <select value={brandKit} onChange={(e) => { setBrandKit(e.target.value); if (e.target.value) { void loadCampaigns(session!.token, e.target.value); void loadAssets(session!.token, e.target.value); } }} style={{ width: '100%' }}>
           <option value="">— selecione —</option>
           {brandKits.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
         </select>

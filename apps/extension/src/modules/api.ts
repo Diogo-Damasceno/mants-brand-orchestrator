@@ -110,3 +110,61 @@ export async function apiPatch<T>(path: string, token: string, body?: unknown): 
   if (!res.ok) throw new Error(`Erro ${res.status}`);
   return res.json() as Promise<T>;
 }
+
+/**
+ * Poll controlado do status do código (usado pelo background para detectar
+ * autorização sem depender do popup aberto). O código é um segredo não
+ * adivinhável, portanto não expõe dados sensíveis.
+ */
+export interface AuthPollResult {
+  authorized: boolean;
+  cancelled: boolean;
+  expired: boolean;
+  error?: string;
+}
+
+export async function pollAuthStatus(code: string): Promise<AuthPollResult> {
+  const res = await fetch(`${API_BASE}/api/extension/auth/poll?code=${encodeURIComponent(code)}`);
+  if (!res.ok) return { authorized: false, cancelled: false, expired: false, error: 'poll_failed' };
+  const data = (await res.json()) as Partial<AuthPollResult>;
+  return {
+    authorized: Boolean(data.authorized),
+    cancelled: Boolean(data.cancelled),
+    expired: Boolean(data.expired),
+  };
+}
+
+/** Cancela um fluxo pendente junto ao backend. */
+export async function cancelAuth(code: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/extension/auth/cancel`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error ?? 'Falha ao cancelar.');
+  }
+}
+
+/**
+ * Download autenticado de um pacote: usa fetch com Bearer e devolve o Blob.
+ * O chamador gera a URL temporária e inicia o download (sem expor token na URL).
+ */
+export async function downloadPackageBlob(id: string, token: string): Promise<Blob> {
+  const res = await fetch(`${API_BASE}/api/packages/${id}/download`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(`Erro ${res.status}`);
+  return res.blob();
+}
+
+/** Registra utilização de um prompt (retorna ok/falha; o chamador decide a UI). */
+export async function registerPromptUsage(promptId: string, token: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/prompts/${promptId}/usage`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+  if (!res.ok) throw new Error(`Erro ${res.status}`);
+}
