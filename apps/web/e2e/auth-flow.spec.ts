@@ -101,7 +101,7 @@ function toPlaywrightCookies(setCookie: string[], url: string): {
   return out;
 }
 
-async function seedState(): Promise<{ seed: Seed; cookie: string }> {
+async function seedState(): Promise<{ seed: Seed; cookie: string; setCookie: string[] }> {
   const email = `e2e+${uid()}@mants.test`; const password = 'E2e@senha123';
   const reg = await apiFetch('POST', '/api/auth/register', { name: 'E2E', email, password, organizationName: `E2E Org ${uid()}` });
   if (reg.status !== 201) throw new Error(`register falhou: ${reg.status} ${JSON.stringify(reg.json)}`);
@@ -146,7 +146,7 @@ async function seedState(): Promise<{ seed: Seed; cookie: string }> {
   if (asset.status !== 201) throw new Error(`asset: ${asset.status} ${JSON.stringify(asset.json)}`);
   const assetId = (asset.json as { id: string }).id;
 
-  return { seed: { email, password, orgId, clientId, brandKitId, campaignId, assetId, deviceId }, cookie };
+  return { seed: { email, password, orgId, clientId, brandKitId, campaignId, assetId, deviceId }, cookie, setCookie: login.setCookie };
 }
 
 test.describe('Fluxo PKCE completo (extensão real Chrome/Chromium)', () => {
@@ -155,7 +155,7 @@ test.describe('Fluxo PKCE completo (extensão real Chrome/Chromium)', () => {
     const manifestPath = path.join(EXTENSION_ROOT, 'manifest.json');
     if (!fs.existsSync(manifestPath)) throw new Error(`Extensão não buildada em ${EXTENSION_ROOT}. Rode o build E2E primeiro.`);
     const { popup: popupPath, sidePanel: sidePanelPath } = readEntryPaths(manifestPath);
-    const { seed, cookie } = await seedState();
+    const { seed, cookie, setCookie } = await seedState();
 
     const context = await chromium.launchPersistentContext('', {
       headless: !process.env.E2E_HEADED,
@@ -163,17 +163,15 @@ test.describe('Fluxo PKCE completo (extensão real Chrome/Chromium)', () => {
       args: [`--disable-extensions-except=${EXTENSION_ROOT}`, `--load-extension=${EXTENSION_ROOT}`],
     });
     try {
-      // 3. Injeta o cookie de sessão web ANTES do PKCE.
-      await context.addCookies(toPlaywrightCookies(
-        (await apiFetch('POST', '/api/auth/login', { email: seed.email, password: seed.password })).setCookie,
-        APP_URL,
-      ));
+      // 3. Injeta o cookie de sessão web ANTES do PKCE (cookie exato do login seed).
+      await context.addCookies(toPlaywrightCookies(setCookie, APP_URL));
       // 3. Valida a sessão DENTRO do navegador (prova que o cookie foi instalado).
       const page = await context.newPage();
       await page.goto(`${APP_URL}/`);
       const me = await page.evaluate(async () => {
         const r = await fetch('/api/auth/me');
-        return { status: r.status, email: (await r.json()).email };
+        const body = await r.json();
+        return { status: r.status, email: body.user?.email };
       });
       expect(me.status).toBe(200);
       expect(me.email).toBe(seed.email);
