@@ -43,13 +43,11 @@ async function main() {
       );
     `);
 
-    // 2. ADQUIRE o advisory lock ANTES de carregar o estado aplicado.
+    // 2. ADQUIRE o advisory lock (BLOQUEANTE) ANTES de carregar o estado aplicado.
     //    Dois processos que carregassem o estado antes do lock poderiam reaplicar.
-    //    Usa try_lock: se outro processo já segura, aborta com erro claro.
-    const lockRes = await client.query<{ locked: boolean }>('SELECT pg_try_advisory_lock($1) AS locked', [LOCK_KEY]);
-    if (!lockRes.rows[0]?.locked) {
-      throw new Error('Outro processo já está executando as migrations (advisory lock ocupado).');
-    }
+    //    Lock bloqueante: a segunda execução aguarda a primeira terminar e ambas
+    //    finalizam com sucesso (sem corrida nem falha por lock ocupado).
+    await client.query('SELECT pg_advisory_lock($1)', [LOCK_KEY]);
     locked = true;
 
     // 3. Carrega estado aplicado DENTRO do lock.

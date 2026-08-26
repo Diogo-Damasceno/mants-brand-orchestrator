@@ -39,11 +39,7 @@
     "minio": "^7.1.3",
     "@playwright/test": "^1.48.0"
   },
-  "pnpm": {
-    "overrides": {
-      "@vitejs/plugin-react": "4.3.4"
-    }
-  },
+  "pnpm": {},
   "packageManager": "pnpm@9.12.3",
   "engines": {
     "node": ">=20.18.0"

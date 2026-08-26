@@ -155,7 +155,7 @@ export async function POST(req: NextRequest) {
       creatorId: ctx.userId,
       fileName: built.fileName,
       storageKey: key,
-      manifestJson: built.manifest as never,
+      manifestJson: built.manifest,
       promptVersion: built.manifest.promptVersion,
       brandKitVersion: built.manifest.brandKitVersion,
       declaredRights: 'Direitos declarados pelo criador.',

@@ -115,11 +115,30 @@ describe('GET /api/extension/session', () => {
     expect(d.valid).toBe(false);
   });
 
-  it('sessão expirada (token) (401)', async () => {
+  it('token expirado (401)', async () => {
     const token = sign({ sub: userA, org: orgA }, -10); // ttl negativo => expirado
     await insertSession(token, userA, orgA);
     const res = (await reqJson(await route.GET(makeReq(token) as never))) as JsonRes;
     expect(res.status).toBe(401);
+  });
+
+  it('sessão expirada no servidor mesmo com token não expirado (401)', async () => {
+    // Token ainda válido (exp futuro), mas o registro em extension_sessions
+    // está com expiresAt no passado => defesa em profundidade do servidor.
+    const token = sign({ sub: userA, org: orgA });
+    await insertSession(token, userA, orgA, 'active', -5);
+    const res = (await reqJson(await route.GET(makeReq(token) as never))) as JsonRes;
+    expect(res.status).toBe(401);
+    const d = await res.json();
+    expect(d.reason).toMatch(/servidor/i);
+  });
+
+  it('role atual da membership prevalece sobre o claim do token', async () => {
+    const token = sign({ sub: userA, org: orgA, roles: ['platform_admin'] });
+    await insertSession(token, userA, orgA);
+    const res = (await reqJson(await route.GET(makeReq(token) as never))) as JsonRes;
+    const d = await res.json();
+    expect(d.roles).toEqual(['organization_owner']); // membro real, não o claim
   });
 
   it('sessão revogada (status) (401)', async () => {

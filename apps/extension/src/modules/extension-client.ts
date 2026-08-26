@@ -69,11 +69,6 @@ export async function logout(): Promise<{ ok: boolean }> {
   return send<{ ok: boolean }>({ type: 'LOGOUT' });
 }
 
-export async function getSessionSafe<T = unknown>(): Promise<T | null> {
-  const r = await send<{ session: T | null }>({ type: 'GET_SESSION' });
-  return r.session;
-}
-
 /** Resultado estruturado da validação de sessão no backend. */
 export interface ExtensionSessionValidation {
   valid: boolean;

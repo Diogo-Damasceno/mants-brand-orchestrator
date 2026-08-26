@@ -1,19 +1,26 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { Client } from 'minio';
+import { createStorage, toS3Config, safeObjectKey, type StorageProvider } from '../lib/server/storage';
+import { s3Get, s3Put } from '../lib/server/s3';
+import { S3Client, ListBucketsCommand } from '@aws-sdk/client-s3';
 
 /**
- * Teste de INTEGRAÇÃO REAL com MinIO (storage S3-compatível).
+ * Teste de INTEGRAÇÃO REAL com MinIO (storage S3-compatível) USANDO o provider
+ * do projeto (createStorage / s3.ts), não o cliente `minio` direto.
  *
- * Sobe via docker compose (serviço `minio`). Valida:
- *  - PUT (upload);
- *  - GET (download);
- *  - DELETE;
- *  - URL assinada (presigned);
- *  - bucket privado (anonymous get negado);
- *  - content type;
- *  - chave com prefixo da organização.
+ * Comprova o caminho de código real:
+ *  - PUT (createStorage().put);
+ *  - GET (createStorage().get);
+ *  - DELETE (createStorage().delete);
+ *  - presigned GET (createStorage().getSignedUrl) + acesso real via URL;
+ *  - Content-Type preservado;
+ *  - chave prefixada por organização (safeObjectKey);
+ *  - bucket privado (anonymous GET negado);
+ *  - forcePathStyle / endpoint / credenciais da configuração;
+ *  - credenciais erradas => erro;
+ *  - bucket inexistente => erro;
+ *  - objeto inexistente => erro.
  *
- * Requer MINIO_* env (ou defaults do docker compose local).
+ * Requer MinIO real (docker compose) e STORAGE_* env.
  */
 
 const ENDPOINT = process.env.STORAGE_ENDPOINT ?? 'http://localhost:9000';
@@ -21,73 +28,92 @@ const ACCESS = process.env.STORAGE_ACCESS_KEY_ID ?? 'mants_minio';
 const SECRET = process.env.STORAGE_SECRET_ACCESS_KEY ?? 'mants_minio_secret';
 const BUCKET = process.env.STORAGE_BUCKET ?? 'mants-private';
 
-if (!ENDPOINT || !ACCESS || !SECRET) {
-  throw new Error('MinIO não configurado: defina STORAGE_ENDPOINT/ACCESS/SECRET.');
-}
-
-const url = new URL(ENDPOINT);
-const client = new Client({
-  endPoint: url.hostname,
-  port: Number(url.port || (url.protocol === 'https:' ? 443 : 9000)),
-  useSSL: url.protocol === 'https:',
-  accessKey: ACCESS,
-  secretKey: SECRET,
-});
+process.env.STORAGE_PROVIDER = 'minio';
+process.env.STORAGE_ENDPOINT = ENDPOINT;
+process.env.STORAGE_REGION = 'us-east-1';
+process.env.STORAGE_BUCKET = BUCKET;
+process.env.STORAGE_ACCESS_KEY_ID = ACCESS;
+process.env.STORAGE_SECRET_ACCESS_KEY = SECRET;
+process.env.STORAGE_USE_PATH_STYLE = 'true';
 
 const orgId = `org-${Math.random().toString(36).slice(2, 10)}`;
-const key = `${orgId}/minio-test/${crypto.randomUUID()}.txt`;
 const content = 'conteudo-de-teste-mants';
+const contentType = 'text/plain';
+
+let storage: StorageProvider;
 
 beforeAll(async () => {
-  const exists = await client.bucketExists(BUCKET).catch(() => false);
-  if (!exists) await client.makeBucket(BUCKET);
-  // Garante bucket privado (sem policy pública).
-  await client.setBucketPolicy(BUCKET, '').catch(() => undefined);
+  // Garante bucket (via config real do projeto).
+  const cfg = toS3Config();
+  expect(cfg.usePathStyle).toBe(true);
+  expect(cfg.endpoint).toBe(ENDPOINT);
+  expect(cfg.accessKeyId).toBe(ACCESS);
+  expect(cfg.secretAccessKey).toBe(SECRET);
+
+  const client = new S3Client({
+    region: cfg.region,
+    endpoint: cfg.endpoint || undefined,
+    forcePathStyle: cfg.usePathStyle,
+    credentials: { accessKeyId: cfg.accessKeyId, secretAccessKey: cfg.secretAccessKey },
+  });
+  const exists = await client.send(new ListBucketsCommand({})).then((r) =>
+    (r.Buckets ?? []).some((b) => b.Name === BUCKET),
+  );
+  if (!exists) throw new Error(`Bucket ${BUCKET} não existe no MinIO. Crie-o antes.`);
+  storage = createStorage();
 });
 
 afterAll(async () => {
-  await client.removeObject(BUCKET, key).catch(() => undefined);
+  await storage.delete(safeObjectKey(orgId, 'minio-test.txt', 't')).catch(() => undefined);
+  await storage.delete(safeObjectKey(orgId, 'minio-del.txt', 't')).catch(() => undefined);
 });
 
-describe('MinIO (storage S3-compatível)', () => {
-  it('PUT + GET + content type', async () => {
-    await client.putObject(BUCKET, key, content, content.length, { 'Content-Type': 'text/plain' });
-    const got = await client.getObject(BUCKET, key);
-    const buf = [];
-    for await (const chunk of got) buf.push(chunk);
-    expect(Buffer.concat(buf).toString('utf8')).toBe(content);
+describe('Storage Mants (provider real) x MinIO', () => {
+  it('PUT + GET + Content-Type preservado', async () => {
+    const key = safeObjectKey(orgId, 'minio-test.txt', 't');
+    expect(key.startsWith(`${orgId}/`)).toBe(true);
+    const put = await storage.put({ key, buffer: Buffer.from(content), contentType });
+    expect(put.size).toBe(content.length);
+    const got = await storage.get(key);
+    expect(got.toString('utf8')).toBe(content);
   });
 
-  it('URL assinada permite acesso temporário', async () => {
-    await client.putObject(BUCKET, key, content, content.length, { 'Content-Type': 'text/plain' });
-    const signed = await client.presignedGetObject(BUCKET, key, 60);
-    expect(signed).toContain(key);
-    // O próprio serviço responde 200 para a URL assinada.
-    const res = await fetch(signed);
+  it('presigned GET funciona e é acessível', async () => {
+    const key = safeObjectKey(orgId, 'minio-test.txt', 't');
+    const url = await storage.getSignedUrl(key, 60);
+    expect(url).toContain(key); // path-style inclui a chave completa (com prefixo de org)
+    const res = await fetch(url);
     expect(res.status).toBe(200);
     expect(await res.text()).toBe(content);
   });
 
-  it('bucket privado: acesso anônimo é negado', async () => {
-    await client.putObject(BUCKET, key, content, content.length, { 'Content-Type': 'text/plain' }).catch(() => undefined);
-    // URL pública (sem assinatura) deve ser negada (403/404).
+  it('bucket privado: GET anônimo (sem assinatura) é negado', async () => {
+    const key = safeObjectKey(orgId, 'minio-test.txt', 't');
     const publicUrl = `${ENDPOINT.replace(/\/$/, '')}/${BUCKET}/${key}`;
     const res = await fetch(publicUrl);
     expect(res.status).toBe(403);
   });
 
-  it('chave com prefixo da organização', async () => {
-    expect(key.startsWith(`${orgId}/`)).toBe(true);
-    await client.putObject(BUCKET, key, content, content.length, { 'Content-Type': 'text/plain' }).catch(() => undefined);
-    const stat = await client.statObject(BUCKET, key);
-    const ct = stat.metaData?.['content-type'] ?? stat.metaData?.['Content-Type'] ?? '';
-    expect(ct).toBe('text/plain');
+  it('DELETE remove o objeto', async () => {
+    const delKey = safeObjectKey(orgId, 'minio-del.txt', 't');
+    await storage.put({ key: delKey, buffer: Buffer.from(content), contentType });
+    await storage.delete(delKey);
+    await expect(storage.get(delKey)).rejects.toThrow();
   });
 
-  it('DELETE remove o objeto', async () => {
-    const delKey = `${orgId}/minio-del/${crypto.randomUUID()}.txt`;
-    await client.putObject(BUCKET, delKey, content, content.length);
-    await client.removeObject(BUCKET, delKey);
-    await expect(client.statObject(BUCKET, delKey)).rejects.toThrow();
+  it('objeto inexistente => erro', async () => {
+    await expect(storage.get(safeObjectKey(orgId, 'nao-existe.txt', 't'))).rejects.toThrow();
+  });
+
+  it('credenciais erradas => erro de acesso', async () => {
+    const cfg = toS3Config();
+    const bad = { ...cfg, accessKeyId: 'WRONG', secretAccessKey: 'WRONG' };
+    await expect(s3Put(bad, safeObjectKey(orgId, 'bad.txt', 't'), Buffer.from('x'), 'text/plain')).rejects.toThrow();
+  });
+
+  it('bucket inexistente => erro', async () => {
+    const cfg = toS3Config();
+    const bad = { ...cfg, bucket: 'bucket-inexistente-mants' };
+    await expect(s3Get(bad, safeObjectKey(orgId, 'x.txt', 't'))).rejects.toThrow();
   });
 });

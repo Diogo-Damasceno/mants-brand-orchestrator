@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { getSession } from '../modules/storage';
+import { getSession, clearSession } from '../modules/storage';
 import { getApiBase, registerPromptUsage, downloadPackageBlob, type Session } from '../modules/api';
 import {
   extGet,
@@ -69,6 +69,10 @@ export default defineSidepanel(() => {
               // Indisponibilidade: mantém a sessão local; apenas informa.
               setStatus('API indisponível. Sessão mantida localmente.');
             } else {
+              // Sessão definitivamente inválida (revogada/expirada/mudança de org):
+              // limpa o storage, zera o estado e impede chamadas subsequentes.
+              await clearSession();
+              setSession(null);
               setStatus('Sessão inválida ou expirada. Faça login novamente.');
               return;
             }

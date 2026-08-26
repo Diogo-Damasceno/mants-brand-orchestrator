@@ -51,7 +51,7 @@ export async function PATCH(req: NextRequest) {
     await db
       .update(schema.generatedPrompts)
       .set({ editedText: body.editedText, editedBy: ctx.userId, editedAt: new Date() })
-      .where(eq(schema.generatedPrompts.id, body.promptId));
+      .where(and(eq(schema.generatedPrompts.id, body.promptId), eq(schema.generatedPrompts.organizationId, ctx.organizationId)));
     return json({ ok: true });
   } catch (e) {
     return errorResponse(e);

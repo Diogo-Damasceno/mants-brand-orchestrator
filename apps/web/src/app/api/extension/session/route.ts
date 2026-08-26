@@ -33,7 +33,7 @@ export async function GET(req: NextRequest) {
 
     const db = getDb();
 
-    // 3: revogação no banco.
+    // 3: revogação e expiração no banco (não confia só no exp do token).
     const [sess] = await db
       .select()
       .from(schema.extensionSessions)
@@ -46,6 +46,10 @@ export async function GET(req: NextRequest) {
         ),
       );
     if (!sess) throw new HttpError(401, 'Sessão de extensão revogada ou inexistente.');
+    // Expiração real no servidor (defesa em profundidade contra token expirado).
+    if (sess.expiresAt.getTime() <= Date.now()) {
+      throw new HttpError(401, 'Sessão de extensão expirada no servidor.');
+    }
 
     // 4: usuário existe e não está deletado.
     const [user] = await db
@@ -61,7 +65,8 @@ export async function GET(req: NextRequest) {
       .where(eq(schema.organizations.id, claims.org));
     if (!org) throw new HttpError(401, 'Organização inexistente.');
 
-    // 6: membership.
+    // 6: membership — usa a ROLE ATUAL da membership, não o claim do token
+    // (o papel do usuário pode ter mudado desde a emissão do token).
     const [member] = await db
       .select({ role: schema.organizationMembers.role })
       .from(schema.organizationMembers)
@@ -77,7 +82,7 @@ export async function GET(req: NextRequest) {
       valid: true,
       userId: claims.sub,
       organizationId: claims.org,
-      roles: claims.roles,
+      roles: [member.role],
       status: sess.status,
       expiresAt: sess.expiresAt.getTime(),
     });

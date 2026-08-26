@@ -45,10 +45,12 @@ export async function PATCH(req: NextRequest) {
     const id = campId(req);
     const body = campaignCreateSchema.partial().parse(await req.json());
     const db = getDb();
-    await db
+    const [updated] = await db
       .update(schema.campaigns)
       .set({ ...body, updatedAt: new Date() })
-      .where(and(eq(schema.campaigns.id, id), eq(schema.campaigns.organizationId, ctx.organizationId)));
+      .where(and(eq(schema.campaigns.id, id), eq(schema.campaigns.organizationId, ctx.organizationId)))
+      .returning({ id: schema.campaigns.id });
+    if (!updated) throw new HttpError(404, 'Campanha não encontrada.');
     return json({ ok: true });
   } catch (e) {
     return errorResponse(e);
@@ -63,10 +65,12 @@ export async function DELETE(req: NextRequest) {
     }
     const id = campId(req);
     const db = getDb();
-    await db
+    const [deleted] = await db
       .update(schema.campaigns)
       .set({ deletedAt: new Date() })
-      .where(and(eq(schema.campaigns.id, id), eq(schema.campaigns.organizationId, ctx.organizationId)));
+      .where(and(eq(schema.campaigns.id, id), eq(schema.campaigns.organizationId, ctx.organizationId)))
+      .returning({ id: schema.campaigns.id });
+    if (!deleted) throw new HttpError(404, 'Campanha não encontrada.');
     return json({ ok: true });
   } catch (e) {
     return errorResponse(e);

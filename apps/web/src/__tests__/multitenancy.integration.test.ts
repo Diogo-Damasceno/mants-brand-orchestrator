@@ -114,7 +114,6 @@ describe('isolamento por organização (multitenancy)', () => {
     expect(idA).toBeTruthy();
     const rB = await call(await import('../app/api/clients/route').then((m) => m.GET(req('GET', '/api/clients', tokenB) as never)));
     const dB = (await rB.json()) as { clients?: unknown[]; error?: string };
-    if (dB.clients === undefined) console.log('DEBUG clients GET orgB:', rB.status, JSON.stringify(dB));
     expect(dB.clients?.length).toBe(0);
     // E a orgA realmente os enxerga.
     const rA = await call(await import('../app/api/clients/route').then((m) => m.GET(req('GET', '/api/clients', tokenA) as never)));
@@ -171,5 +170,100 @@ describe('isolamento por organização (multitenancy)', () => {
     expect(((await resB.json()) as { results: unknown[] }).results.length).toBe(0);
     const resA = await call(await import('../app/api/results/route').then((m) => m.GET(req('GET', '/api/results', tokenA) as never)));
     expect(((await resA.json()) as { results: unknown[] }).results.length).toBe(1);
+  });
+});
+
+describe('isolamento por ID (multitenancy direto)', () => {
+  async function seedClient() {
+    return createClient(tokenA, 'Cliente A');
+  }
+  async function seedBrandKit(clientId: string) {
+    const id = crypto.randomUUID();
+    await db.insert(schema.brandKits).values({ id, organizationId: orgA, clientId, name: 'BK A', version: 1 });
+    return id;
+  }
+  async function seedCampaign(clientId: string, bkId: string) {
+    const id = crypto.randomUUID();
+    await db.insert(schema.campaigns).values({ id, organizationId: orgA, clientId, brandKitId: bkId, name: 'Camp A' });
+    return id;
+  }
+
+  it('client por ID: orgB recebe 404', async () => {
+    const id = await seedClient();
+    const r = await call(await import('../app/api/clients/[id]/route').then((m) => m.GET(req('GET', `/api/clients/${id}`, tokenB) as never)));
+    expect(r.status).toBe(404);
+    // Dono consegue.
+    const rA = await call(await import('../app/api/clients/[id]/route').then((m) => m.GET(req('GET', `/api/clients/${id}`, tokenA) as never)));
+    expect(rA.status).toBe(200);
+  });
+
+  it('client DELETE: orgB não apaga recurso da orgA (404)', async () => {
+    const id = await seedClient();
+    const r = await call(await import('../app/api/clients/[id]/route').then((m) => m.DELETE(req('DELETE', `/api/clients/${id}`, tokenB) as never)));
+    expect(r.status).toBe(404);
+    const still = await db.select().from(schema.clients).where(eq(schema.clients.id, id));
+    expect(still.length).toBe(1); // banco inalterado
+  });
+
+  it('brandKit por ID: orgB recebe 404 (GET/PATCH)', async () => {
+    const cid = await seedClient();
+    const bkId = await seedBrandKit(cid);
+    const g = await call(await import('../app/api/brand-kits/[id]/route').then((m) => m.GET(req('GET', `/api/brand-kits/${bkId}`, tokenB) as never)));
+    expect(g.status).toBe(404);
+    const p = await call(await import('../app/api/brand-kits/[id]/route').then((m) => m.PATCH(req('PATCH', `/api/brand-kits/${bkId}`, tokenB, { name: 'hack' }) as never)));
+    expect(p.status).toBe(404);
+    const still = await db.select().from(schema.brandKits).where(eq(schema.brandKits.id, bkId));
+    expect(still[0]!.name).toBe('BK A'); // não foi alterado
+  });
+
+  it('campaign por ID: orgB recebe 404 (GET/DELETE)', async () => {
+    const cid = await seedClient();
+    const bkId = await seedBrandKit(cid);
+    const campId = await seedCampaign(cid, bkId);
+    const g = await call(await import('../app/api/campaigns/[id]/route').then((m) => m.GET(req('GET', `/api/campaigns/${campId}`, tokenB) as never)));
+    expect(g.status).toBe(404);
+    const d = await call(await import('../app/api/campaigns/[id]/route').then((m) => m.DELETE(req('DELETE', `/api/campaigns/${campId}`, tokenB) as never)));
+    expect(d.status).toBe(404);
+    const still = await db.select().from(schema.campaigns).where(eq(schema.campaigns.id, campId));
+    expect(still.length).toBe(1);
+  });
+
+  it('download de asset: orgB recebe 404', async () => {
+    const cid = await seedClient();
+    const bkId = await seedBrandKit(cid);
+    const assetId = crypto.randomUUID();
+    await db.insert(schema.brandAssets).values({ id: assetId, organizationId: orgA, brandKitId: bkId, clientId: cid, storageKey: `org/${orgA}/${assetId}`, originalName: 'a.png', mimeType: 'image/png', sizeBytes: 10, status: 'approved', assetHash: 'x', uploadedBy: userA });
+    const r = await call(await import('../app/api/assets/[id]/download/route').then((m) => m.GET(req('GET', `/api/assets/${assetId}/download`, tokenB) as never)));
+    expect(r.status).toBe(404);
+  });
+
+  it('download de pacote: orgB recebe 404', async () => {
+    const cid = await seedClient();
+    const pkgId = crypto.randomUUID();
+    await db.insert(schema.creativePackages).values({ id: pkgId, organizationId: orgA, clientId: cid, fileName: 'p.zip', storageKey: `org/${orgA}/${pkgId}.zip`, manifestJson: { promptVersion: 1, brandKitVersion: 1 }, promptVersion: 1, brandKitVersion: 1, declaredRights: 'x', acceptanceText: 'y' });
+    const r = await call(await import('../app/api/packages/[id]/download/route').then((m) => m.GET(req('GET', `/api/packages/${pkgId}/download`, tokenB) as never)));
+    expect(r.status).toBe(404);
+  });
+
+  it('edição de prompt por ID: orgB recebe 404', async () => {
+    const promptId = crypto.randomUUID();
+    await db.insert(schema.generatedPrompts).values({ id: promptId, organizationId: orgA, mode: 'professional', originalText: 'orig', promptHash: 'x', version: 1, createdBy: userA });
+    const r = await call(await import('../app/api/prompts/[id]/route').then((m) => m.PATCH(req('PATCH', `/api/prompts/${promptId}`, tokenB, { promptId, editedText: 'hack' }) as never)));
+    expect(r.status).toBe(404);
+  });
+
+  it('aprovação de resultado: orgB recebe 404', async () => {
+    const resultId = crypto.randomUUID();
+    await db.insert(schema.results).values({ id: resultId, organizationId: orgA, status: 'submitted', createdBy: userA });
+    const r = await call(await import('../app/api/results/[id]/approvals/route').then((m) => m.POST(req('POST', `/api/results/${resultId}/approvals`, tokenB, { resultId, decision: 'approved' }) as never)));
+    expect(r.status).toBe(404);
+  });
+
+  it('revogação de sessão por ID: orgB recebe 404', async () => {
+    const sessionId = crypto.randomUUID();
+    await db.insert(schema.extensionSessions).values({ id: sessionId, organizationId: orgA, userId: userA, deviceId: 'dev', tokenHash: 'x', status: 'active', expiresAt: new Date(Date.now() + 3600_000) });
+    const mod = await import('../app/api/extension/sessions/[id]/revoke/route');
+    const r = await call(await mod.POST(req('POST', `/api/extension/sessions/${sessionId}/revoke`, tokenB) as never, { params: { id: sessionId } } as never));
+    expect(r.status).toBe(404);
   });
 });

@@ -1,3 +1,7 @@
 packages:
   - "apps/*"
   - "packages/*"
+
+pnpm:
+  overrides:
+    "@vitejs/plugin-react": 4.3.4

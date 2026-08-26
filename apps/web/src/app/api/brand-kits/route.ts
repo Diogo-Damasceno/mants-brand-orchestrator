@@ -43,10 +43,31 @@ export async function POST(req: NextRequest) {
     const id = randomUUID();
     await db.insert(schema.brandKits).values({ id, organizationId: ctx.organizationId, version: 1, ...body });
     for (const c of body.colors ?? []) {
-      await db.insert(schema.brandColors).values({ id: randomUUID(), brandKitId: id, ...c } as never);
+      await db.insert(schema.brandColors).values({
+        id: randomUUID(),
+        brandKitId: id,
+        name: c.name,
+        hex: c.hex,
+        rgb: c.rgb,
+        cmyk: c.cmyk ?? null,
+        colorRole: c.role,
+        contrast: c.contrast ?? null,
+        priority: c.priority,
+      });
     }
     for (const f of body.fonts ?? []) {
-      await db.insert(schema.brandFonts).values({ id: randomUUID(), brandKitId: id, ...f } as never);
+      await db.insert(schema.brandFonts).values({
+        id: randomUUID(),
+        brandKitId: id,
+        family: f.family,
+        weight: f.weight,
+        style: f.style,
+        functionRole: f.functionRole,
+        file: f.file ?? null,
+        origin: f.origin ?? null,
+        license: f.license ?? null,
+        commercialRightsConfirmed: f.commercialRightsConfirmed,
+      });
     }
     return json({ id }, 201);
   } catch (e) {

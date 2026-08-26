@@ -31,7 +31,7 @@ export async function POST(req: NextRequest) {
     await db
       .update(schema.results)
       .set({ status: body.decision === 'approved' ? 'approved' : 'changes_requested' })
-      .where(eq(schema.results.id, body.resultId));
+      .where(and(eq(schema.results.id, body.resultId), eq(schema.results.organizationId, ctx.organizationId)));
     return json({ id, decision: body.decision }, 201);
   } catch (e) {
     return errorResponse(e);
