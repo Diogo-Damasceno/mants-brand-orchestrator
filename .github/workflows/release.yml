@@ -56,7 +56,7 @@ jobs:
         run: |
           docker run -d --name mants-minio -p 9000:9000 -p 9001:9001 \
             -e MINIO_ROOT_USER=mants_minio -e MINIO_ROOT_PASSWORD=mants_minio_secret \
-            minio/minio:RELEASE.2024-08-03T04-19-31Z server /data --console-address :9001
+            minio/minio:RELEASE.2024-12-18T13-15-44Z server /data --console-address :9001
           for i in $(seq 1 30); do curl -fsS http://localhost:9000/minio/health/ready && break; sleep 2; done
           curl -fsS http://localhost:9000/minio/health/ready || { docker logs mants-minio; exit 1; }
       - name: Cria banco de teste (URL administrativa; sem ocultar falha)
@@ -65,8 +65,8 @@ jobs:
           docker exec mants-postgres psql -U mants -d mants_db -c "CREATE DATABASE mants_test"
       - name: Cria bucket privado (mc separado)
         run: |
-          docker run --rm --network host -e MC_HOST_local=http://mants_minio:mants_minio_secret@localhost:9000 minio/mc:RELEASE.2024-08-03T04-19-31Z mb --ignore-existing local/mants-private
-          docker run --rm --network host -e MC_HOST_local=http://mants_minio:mants_minio_secret@localhost:9000 minio/mc:RELEASE.2024-08-03T04-19-31Z anonymous set local/mants-private none
+          docker run --rm --network host -e MC_HOST_local=http://mants_minio:mants_minio_secret@localhost:9000 minio/mc:RELEASE.2024-12-18T13-15-44Z mb --ignore-existing local/mants-private
+          docker run --rm --network host -e MC_HOST_local=http://mants_minio:mants_minio_secret@localhost:9000 minio/mc:RELEASE.2024-12-18T13-15-44Z anonymous set local/mants-private none
       - name: Migrations
         run: pnpm db:migrate
       - name: Unitários
