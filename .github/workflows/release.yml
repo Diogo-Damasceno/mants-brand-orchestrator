@@ -112,6 +112,7 @@ jobs:
       - name: Valida API_BASE de produção (obrigatório, sem fallback silencioso)
         run: |
           API_BASE="$(echo "$API_BASE" | tr -d '[:space:]')"
+          echo "len=${#API_BASE}"
           test -n "$API_BASE" || { echo "API_BASE (secret) ausente"; exit 1; }
           echo "$API_BASE" | grep -qE '^https://[^/]+\.[^/]+$' || { echo "API_BASE inválido (exige https puro, sem path/query, não localhost): $API_BASE"; exit 1; }
           echo "$API_BASE" | grep -qiE 'localhost|SEU_DOMINIO|your-domain' && { echo "API_BASE não pode ser localhost/placeholder"; exit 1; }
