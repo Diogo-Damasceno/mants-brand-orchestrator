@@ -198,6 +198,7 @@ export const extensionAuthStartSchema = z.object({
   origin: z.string().url(),
   stateHash: z.string().regex(sha256HexRegex, 'stateHash deve ser SHA-256 hexadecimal (64 chars)'),
   nonceHash: z.string().regex(sha256HexRegex, 'nonceHash deve ser SHA-256 hexadecimal (64 chars)'),
+  cancelSecretHash: z.string().regex(sha256HexRegex, 'cancelSecretHash deve ser SHA-256 hexadecimal (64 chars)'),
   browser: z.string().min(1).max(80),
   extensionVersion: z.string().min(1).max(40),
   extensionName: z.string().min(1).max(160).default('Mants Brand Orchestrator'),

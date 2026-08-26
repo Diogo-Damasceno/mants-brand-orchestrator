@@ -1,7 +1,9 @@
 import { NextRequest } from 'next/server';
+import { timingSafeEqual } from 'node:crypto';
 import { getDb, schema } from '@mants/database';
 import { eq, and, isNull } from 'drizzle-orm';
 import { authenticate, json, errorResponse, HttpError } from '@/lib/server/http';
+import { sha256Hex } from '@mants/auth';
 
 /** Mascara um código para logs (nunca expõe o código completo). */
 function maskCode(code: string): string {
@@ -9,80 +11,96 @@ function maskCode(code: string): string {
   return `${code.slice(0, 4)}…${code.slice(-4)}`;
 }
 
+function hashMatches(storedHash: string | null | undefined, plainValue: string | undefined): boolean {
+  if (!storedHash || !plainValue) return false;
+  const computed = sha256Hex(plainValue);
+  const a = Buffer.from(storedHash);
+  const b = Buffer.from(computed);
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
+
 /**
- * Cancelamento de um auth_code pendente.
- * NÃO apaga o código: marca cancelledAt para que jamais possa ser autorizado/trocado.
+ * Cancelamento de um auth_code pendente (fluxo PKCE).
  *
- * Proteções:
- *  - não cancela se já usado (usedAt), expirado ou já autorizado (userId/authorizedAt);
- *  - só o usuário autenticado no contexto correto pode cancelar o fluxo que lhe pertence;
- *  - cancelamento e audit log na MESMA transação (rollback em falha de auditoria);
- *  - idempotente: cancelar de novo devolve ok, mas não faz um código inexistente
- *    parecer válido (o comportamento interno distingue os casos).
- * Respostas genéricas para evitar enumeração de códigos válidos.
+ * Dois modos (ambos seguros):
+ *  1) PÚBLICO (popup/extensão): envia `code` + `cancelSecret`. O backend compara
+ *     cancelSecretHash em tempo constante. Não depende de organizationId
+ *     (que só existe após a autorização). A extensão gera cancelSecret no início.
+ *  2) AUTENTICADO (site): envia apenas `code` com cookie de sessão. O código é
+ *     não-adivinhável e só é exibido ao usuário autenticado na tela de autorização,
+ *     portanto cancelar por código com sessão é aceitável.
+ *
+ * Proteções comuns:
+ *  - não cancela se já usado (usedAt), já autorizado (userId/authorizedAt) ou expirado;
+ *  - cancelamento e auditoria na MESMA transação (rollback em falha de auditoria);
+ *  - idempotente: cancelar de novo devolve ok, mas não faz código inexistente
+ *    parecer válido.
+ * Respostas genéricas para evitar enumeração de códigos.
  */
 export async function POST(req: NextRequest) {
   try {
-    const ctx = await authenticate(req);
     const body = await req.json().catch(() => ({}));
     const code = String(body.code ?? '');
+    const cancelSecret = String(body.cancelSecret ?? '');
     if (!code) throw new HttpError(400, 'Código ausente.');
+
     const db = getDb();
+    const isPublicCancel = Boolean(cancelSecret);
 
     const result = await db.transaction(async (tx) => {
       const [row] = await tx
-        .update(schema.authCodes)
-        .set({ cancelledAt: new Date() })
-        .where(
-          and(
-            eq(schema.authCodes.code, code),
-            isNull(schema.authCodes.usedAt),
-            isNull(schema.authCodes.cancelledAt),
-            // Só pode cancelar fluxo ainda não autorizado.
-            isNull(schema.authCodes.authorizedAt),
-            // Só o contexto que pode autorizar (mesmo usuário/org) cancela.
-            eq(schema.authCodes.organizationId, ctx.organizationId),
-          ),
-        )
-        .returning();
+        .select()
+        .from(schema.authCodes)
+        .where(and(eq(schema.authCodes.code, code), isNull(schema.authCodes.usedAt)))
+        .for('update');
 
       if (!row) {
-        // Consulta apenas para distinguir o caso (sem alterar o registro).
-        const [existing] = await tx
-          .select({
-            usedAt: schema.authCodes.usedAt,
-            cancelledAt: schema.authCodes.cancelledAt,
-            authorizedAt: schema.authCodes.authorizedAt,
-            expiresAt: schema.authCodes.expiresAt,
-            organizationId: schema.authCodes.organizationId,
-            userId: schema.authCodes.userId,
-          })
-          .from(schema.authCodes)
-          .where(eq(schema.authCodes.code, code));
-
-        // Bloqueios explícitos (mas resposta genérica ao cliente).
-        if (existing?.usedAt) throw new HttpError(409, 'Código já utilizado.');
-        if (existing?.authorizedAt) throw new HttpError(409, 'Código já autorizado.');
-        if (existing?.organizationId && existing.organizationId !== ctx.organizationId)
-          throw new HttpError(403, 'Sem permissão para cancelar este fluxo.');
-        if (existing?.expiresAt && existing.expiresAt.getTime() < Date.now())
-          throw new HttpError(400, 'Código expirado.');
-        // Idempotência: já cancelado ou inexistente -> confirma cancelamento.
-        return { cancelled: Boolean(existing?.cancelledAt ?? !existing), audit: Boolean(existing?.cancelledAt) };
+        // Não existe ou já foi usado: resposta neutra (idempotente).
+        return { ok: true, cancelled: false, audit: false };
+      }
+      if (row.authorizedAt || row.userId) {
+        throw new HttpError(409, 'Código já autorizado.');
+      }
+      if (row.usedAt) {
+        throw new HttpError(409, 'Código já utilizado.');
+      }
+      if (row.expiresAt.getTime() < Date.now()) {
+        throw new HttpError(400, 'Código expirado.');
+      }
+      if (row.cancelledAt) {
+        return { ok: true, cancelled: true, audit: false }; // idempotência
       }
 
+      if (isPublicCancel) {
+        // Modo 1: extensão com cancelSecret (tempo constante).
+        if (!hashMatches(row.cancelSecretHash, cancelSecret)) {
+          throw new HttpError(403, 'Cancelamento não autorizado.');
+        }
+      } else {
+        // Modo 2: usuário autenticado no site (cookie). Exige sessão válida.
+        const ctx = await authenticate(req);
+        void ctx; // O código já é não-adivinhável e exibido só a este usuário.
+      }
+
+      await tx
+        .update(schema.authCodes)
+        .set({ cancelledAt: new Date() })
+        .where(eq(schema.authCodes.code, code));
+
       await tx.insert(schema.auditLogs).values({
-        organizationId: ctx.organizationId,
-        actorId: ctx.userId,
+        organizationId: row.organizationId ?? '00000000-0000-0000-0000-000000000000',
+        actorId: row.userId ?? '00000000-0000-0000-0000-000000000000',
         action: 'extension_auth_cancel',
         entity: 'auth_code',
         entityId: null,
-        detail: { codeMasked: maskCode(row.code), deviceId: row.deviceId },
+        detail: { codeMasked: maskCode(row.code), deviceId: row.deviceId, via: isPublicCancel ? 'cancel_secret' : 'web_session' },
       });
-      return { cancelled: true, audit: true };
+
+      return { ok: true, cancelled: true, audit: true };
     });
 
-    return json({ ok: true, cancelled: result.cancelled });
+    return json({ ok: result.ok, cancelled: result.cancelled });
   } catch (e) {
     return errorResponse(e);
   }

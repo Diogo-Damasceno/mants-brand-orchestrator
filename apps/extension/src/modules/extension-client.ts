@@ -15,18 +15,18 @@ export interface ApiTokenOptions {
 }
 
 export async function extGet<T>(path: string, token: string): Promise<T> {
-  return fetchWithAuth('GET', path, token);
+  return fetchWithAuth<T>('GET', path, token);
 }
 
 export async function extPost<T>(path: string, token: string, body?: unknown): Promise<T> {
-  return fetchWithAuth('POST', path, token, body);
+  return fetchWithAuth<T>('POST', path, token, body);
 }
 
 export async function extPatch<T>(path: string, token: string, body?: unknown): Promise<T> {
-  return fetchWithAuth('PATCH', path, token, body);
+  return fetchWithAuth<T>('PATCH', path, token, body);
 }
 
-async function fetchWithAuth(method: string, path: string, token: string, body?: unknown): Promise<T> {
+async function fetchWithAuth<T>(method: string, path: string, token: string, body?: unknown): Promise<T> {
   const res = await fetch(`${getApiBase()}${path}`, {
     method,
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
@@ -41,6 +41,13 @@ async function fetchWithAuth(method: string, path: string, token: string, body?:
       .catch(() => undefined);
     throw new Error('Sessão expirada. Faça login novamente.');
   }
+  if (!res.ok) throw new Error(`Erro ${res.status}`);
+  return res.json() as Promise<T>;
+}
+
+/** Busca configuração pública (rota sem autenticação). Não envia token. */
+export async function getPublicConfig<T = unknown>(): Promise<T> {
+  const res = await fetch(`${getApiBase()}/api/extension/config`);
   if (!res.ok) throw new Error(`Erro ${res.status}`);
   return res.json() as Promise<T>;
 }

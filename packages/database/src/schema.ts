@@ -142,6 +142,7 @@ export const authCodes = pgTable('auth_codes', {
   extensionVersion: varchar('extension_version', { length: 40 }),
   stateHash: varchar('state_hash', { length: 64 }),
   nonceHash: varchar('nonce_hash', { length: 64 }),
+  cancelSecretHash: varchar('cancel_secret_hash', { length: 64 }),
   authorizedAt: timestamp('authorized_at', { withTimezone: true }),
   cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),

@@ -1,12 +1,13 @@
 import { useState, useEffect } from 'react';
-import { getSession } from '../modules/storage';
+import { getSession, clearSession } from '../modules/storage';
 import { getApiBase, type Session } from '../modules/api';
 import {
   startAuthFlow,
   cancelFlow,
   logout,
   getAuthStatus,
-  extGet,
+  getPublicConfig,
+  getSessionSafe,
 } from '../modules/extension-client';
 import type { AuthStatus } from '../modules/messages';
 
@@ -29,24 +30,27 @@ export default definePopup(() => {
   const [status, setStatus] = useState<AuthStatus>({ phase: 'idle', code: null, error: null });
   const [error, setError] = useState('');
   const [manifestVersion, setManifestVersion] = useState('0.1.0');
+  const [minVersion, setMinVersion] = useState(FALLBACK_MIN_VERSION);
   const [versionOk, setVersionOk] = useState(true);
   const [busy, setBusy] = useState(false);
   const [expired, setExpired] = useState(false);
 
-  // Lê versão real do manifesto e verifica a versão mínima aceita pela API.
+  // Lê versão real do manifesto e verifica a versão mínima aceita pela API
+  // (rota pública, sem token).
   useEffect(() => {
     const manifest = browser.runtime.getManifest();
     const v = manifest.version ?? '0.1.0';
     setManifestVersion(v);
-    void extGet<{ extensionMinVersion: string }>('/api/extension/config')
+    void getPublicConfig<{ extensionMinVersion: string }>()
       .then((cfg) => {
         const min = cfg.extensionMinVersion || FALLBACK_MIN_VERSION;
+        setMinVersion(min);
         setVersionOk(compareVersions(v, min) >= 0);
       })
       .catch(() => setVersionOk(true)); // não bloqueia offline
   }, []);
 
-  // Sessão persistida + estado de autenticação do background.
+  // Sessão persistida + estado de autenticação do background + validação no backend.
   useEffect(() => {
     void refresh();
   }, []);
@@ -54,8 +58,27 @@ export default definePopup(() => {
   async function refresh() {
     const s = await getSession<Session>();
     setSession(s);
+    if (s?.token) {
+      // Valida no backend (revogação/expiração/organização); não confia só no storage.
+      try {
+        await getSessionSafe();
+      } catch {
+        // 401 do backend: sessão inválida.
+        await clearSession();
+        setSession(null);
+        setExpired(true);
+        broadcastExpired();
+        return;
+      }
+    }
     const st = await getAuthStatus();
     applyStatus(st);
+  }
+
+  function broadcastExpired() {
+    void browser.runtime
+      .sendMessage({ type: 'AUTH_STATE_CHANGED', status: { phase: 'expired', code: null, error: 'Sessão expirada.' } })
+      .catch(() => undefined);
   }
 
   function applyStatus(st: AuthStatus) {
@@ -168,7 +191,7 @@ export default definePopup(() => {
 
       {!versionOk && (
         <p style={{ fontSize: 12, color: '#b00' }}>
-          Extensão desatualizada. Atualize para continuar. (mín {FALLBACK_MIN_VERSION})
+          Extensão desatualizada. Atualize para continuar. (mín {minVersion})
         </p>
       )}
 

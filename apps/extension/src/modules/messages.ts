@@ -30,6 +30,7 @@ export interface PendingFlow {
   state: string;
   nonce: string;
   deviceId: string;
+  cancelSecret: string;
   origin: string;
   browser: string;
   extensionVersion: string;
@@ -76,4 +77,9 @@ export interface LogoutResult {
 
 export interface CancelFlowResult {
   ok: boolean;
+}
+
+export interface CancelAuthPayload {
+  code: string;
+  cancelSecret: string;
 }

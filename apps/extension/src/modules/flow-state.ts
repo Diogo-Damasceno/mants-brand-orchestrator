@@ -13,6 +13,7 @@ import type { AuthStatus, PendingFlow } from './messages';
 
 const FLOW_KEY = 'mants_pending_flow';
 const STATUS_KEY = 'mants_auth_status';
+const POLL_INTERVAL_KEY = 'mants_pkce_poll_interval';
 
 export async function savePendingFlow(flow: PendingFlow): Promise<void> {
   await browser.storage.local.set({ [FLOW_KEY]: flow });
@@ -24,7 +25,16 @@ export async function getPendingFlow(): Promise<PendingFlow | null> {
 }
 
 export async function clearPendingFlow(): Promise<void> {
-  await browser.storage.local.remove(FLOW_KEY);
+  await browser.storage.local.remove([FLOW_KEY, POLL_INTERVAL_KEY]);
+}
+
+export async function savePollInterval(ms: number): Promise<void> {
+  await browser.storage.local.set({ [POLL_INTERVAL_KEY]: ms });
+}
+
+export async function getPollInterval(): Promise<number> {
+  const r = await browser.storage.local.get(POLL_INTERVAL_KEY);
+  return (r[POLL_INTERVAL_KEY] as number) ?? 2_000;
 }
 
 export async function saveAuthStatus(status: AuthStatus): Promise<void> {

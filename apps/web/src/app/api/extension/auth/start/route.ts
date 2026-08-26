@@ -25,6 +25,7 @@ export async function POST(req: NextRequest) {
       origin: body.origin,
       stateHash: body.stateHash,
       nonceHash: body.nonceHash,
+      cancelSecretHash: body.cancelSecretHash,
       browser: body.browser,
       extensionVersion: body.extensionVersion,
       extensionName: body.extensionName,

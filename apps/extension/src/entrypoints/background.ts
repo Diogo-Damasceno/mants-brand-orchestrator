@@ -1,4 +1,3 @@
-import { ChatSurfaceAdapter } from '../modules/chat-surface';
 import {
   generateDeviceId,
   saveSession,
@@ -25,6 +24,8 @@ import {
   clearPendingFlow,
   saveAuthStatus,
   getAuthStatus,
+  savePollInterval,
+  getPollInterval,
 } from '../modules/flow-state';
 import type {
   ExtensionMessage,
@@ -36,21 +37,22 @@ import type {
   InsertTextResult,
   LogoutResult,
   CancelFlowResult,
+  CancelAuthPayload,
 } from '../modules/messages';
 
 // Background service worker: dono do fluxo PKCE durável.
 // O popup pode fechar; o background persiste o fluxo e conclui o exchange.
+// A recuperação após suspensão do SW usa browser.alarms (não setTimeout).
 
 const FLOW_TTL_MS = 10 * 60_000; // 10 minutos (espelha o backend)
-const POLL_INTERVAL_MS = 2_000;
-const POLL_BACKOFF_MS = 1_500;
+const ALARM_NAME = 'mants_pkce_poll';
+const POLL_INTERVAL_MS = 2_000; // intervalo base do alarme (backoff aplicado por contador)
+const POLL_BACKOFF_STEP = 1_500;
 const POLL_MAX_INTERVAL_MS = 15_000;
-
-let pollTimer: ReturnType<typeof setTimeout> | null = null;
 
 function broadcast(status: AuthStatus): void {
   void saveAuthStatus(status);
-  browser.runtime.sendMessage({ type: 'AUTH_STATE_CHANGED', status }).catch(() => undefined);
+  void browser.runtime.sendMessage({ type: 'AUTH_STATE_CHANGED', status }).catch(() => undefined);
 }
 
 function idleStatus(): AuthStatus {
@@ -74,72 +76,67 @@ async function beginExchange(flow: PendingFlow): Promise<void> {
     );
     // Sucesso: apaga segredos temporários imediatamente.
     await clearPendingFlow();
+    await clearAlarm();
     await saveSession(session);
     broadcast({ phase: 'authenticated', code: null, error: null });
-    browser.runtime.sendMessage({ type: 'SESSION_CHANGED', session }).catch(() => undefined);
+    void browser.runtime.sendMessage({ type: 'SESSION_CHANGED', session }).catch(() => undefined);
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'Falha na troca de código.';
     await clearPendingFlow();
+    await clearAlarm();
     broadcast({ phase: 'error', code: null, error: msg });
-  } finally {
-    stopPolling();
   }
 }
 
-function schedulePoll(flow: PendingFlow, interval: number): void {
-  stopPolling();
-  pollTimer = setTimeout(() => {
-    void pollAndAdvance(flow, interval);
-  }, interval);
-  // Não mantém o service worker vivo sozinho: o timer do SW cuida disso em MV3.
-  void browser.runtime.getManifest();
-}
-
-async function pollAndAdvance(flow: PendingFlow, interval: number): Promise<void> {
+async function pollAndAdvance(flow: PendingFlow): Promise<number> {
   // Se o fluxo sumiu (cancelado por outro lado), para.
   const current = await getPendingFlow();
   if (!current || current.code !== flow.code) {
-    stopPolling();
-    return;
+    await clearAlarm();
+    return 0;
   }
   if (isExpired(flow)) {
     await clearPendingFlow();
-    stopPolling();
+    await clearAlarm();
     broadcast({ phase: 'expired', code: null, error: 'Código expirado.' });
-    return;
+    return 0;
   }
   try {
     const status = await pollAuthStatus(flow.code);
     if (status.authorized) {
       await beginExchange(flow);
-      return;
+      return 0;
     }
     if (status.cancelled) {
       await clearPendingFlow();
-      stopPolling();
+      await clearAlarm();
       broadcast({ phase: 'idle', code: null, error: 'Autorização cancelada.' });
-      return;
+      return 0;
     }
     if (status.expired) {
       await clearPendingFlow();
-      stopPolling();
+      await clearAlarm();
       broadcast({ phase: 'expired', code: null, error: 'Código expirado.' });
-      return;
+      return 0;
     }
-    // Ainda não autorizado: backoff controlado, sem sobrecarregar a API.
-    const next = Math.min(interval + POLL_BACKOFF_MS, POLL_MAX_INTERVAL_MS);
-    schedulePoll(flow, next);
   } catch {
-    // Falha de rede transitória: tenta de novo com backoff.
-    const next = Math.min(interval + POLL_BACKOFF_MS, POLL_MAX_INTERVAL_MS);
-    schedulePoll(flow, next);
+    // Falha de rede transitória: mantém o alarme (backoff no próximo tick).
   }
+  return POLL_INTERVAL_MS;
 }
 
-function stopPolling(): void {
-  if (pollTimer) {
-    clearTimeout(pollTimer);
-    pollTimer = null;
+/** Agenda o alarme de polling com intervalo crescente (backoff), sem duplicar. */
+async function scheduleAlarm(interval: number): void {
+  await clearAlarm();
+  await savePollInterval(interval);
+  await browser.alarms.create(ALARM_NAME, { periodInMinutes: interval / 60_000 });
+}
+
+async function clearAlarm(): Promise<void> {
+  try {
+    await browser.alarms.clear(ALARM_NAME);
+  } catch {
+    /* ignore */
   }
 }
 
@@ -154,6 +151,8 @@ async function startFlow(): Promise<StartAuthResult> {
     const nonce = generateNonce();
     const stateHash = await sha256Hex(state);
     const nonceHash = await sha256Hex(nonce);
+    const cancelSecret = generateState(); // segredo aleatório para cancelamento
+    const cancelSecretHash = await sha256Hex(cancelSecret);
     const origin = getApiBase();
     const browserName = browser.runtime.getURL('').includes('moz-extension') ? 'Firefox' : 'Chrome';
 
@@ -163,6 +162,7 @@ async function startFlow(): Promise<StartAuthResult> {
       origin,
       stateHash,
       nonceHash,
+      cancelSecretHash,
       browser: browserName,
       extensionVersion,
       extensionName: 'Mants Brand Orchestrator',
@@ -174,6 +174,7 @@ async function startFlow(): Promise<StartAuthResult> {
       state,
       nonce,
       deviceId,
+      cancelSecret,
       origin,
       browser: browserName,
       extensionVersion,
@@ -181,7 +182,7 @@ async function startFlow(): Promise<StartAuthResult> {
       createdAt: Date.now(),
     };
 
-    // Persiste ANTES de abrir a aba (sobrevive à suspensão do SW).
+    // Persiste ANTES de abrir a aba (sobrevive à suspensão do SW + reinício).
     await savePendingFlow(flow);
     broadcast({ phase: 'awaiting_user', code, error: null });
 
@@ -189,8 +190,8 @@ async function startFlow(): Promise<StartAuthResult> {
       url: `${origin}/extension/authorize?code=${encodeURIComponent(code)}`,
     });
 
-    // Inicia o polling controlado para concluir o exchange após a autorização.
-    schedulePoll(flow, POLL_INTERVAL_MS);
+    // Inicia o polling durável via alarme.
+    await scheduleAlarm(POLL_INTERVAL_MS);
     return { ok: true };
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'Falha ao iniciar login.';
@@ -202,13 +203,19 @@ async function startFlow(): Promise<StartAuthResult> {
 async function cancelFlow(): Promise<CancelFlowResult> {
   const flow = await getPendingFlow();
   if (!flow) return { ok: true };
+  // Envia code + cancelSecret ao backend (cancelamento sem cookie/Bearer).
+  const payload: CancelAuthPayload = { code: flow.code, cancelSecret: flow.cancelSecret };
   try {
-    await cancelAuth(flow.code);
-  } catch {
-    // Mesmo se o backend falhar, limpamos o estado local.
+    await cancelAuth(payload);
+  } catch (e) {
+    // NÃO engole silenciosamente: reporta falha ao popup (que só mostra
+    // cancelamento confirmado quando o backend confirmar).
+    const msg = e instanceof Error ? e.message : 'Falha ao cancelar no servidor.';
+    broadcast({ phase: 'error', code: flow.code, error: msg });
+    return { ok: false };
   }
   await clearPendingFlow();
-  stopPolling();
+  await clearAlarm();
   broadcast({ phase: 'idle', code: null, error: 'Fluxo cancelado.' });
   return { ok: true };
 }
@@ -224,24 +231,24 @@ async function logout(): Promise<LogoutResult> {
   }
   await clearSession();
   await clearPendingFlow();
-  stopPolling();
+  await clearAlarm();
   broadcast(idleStatus());
-  browser.runtime.sendMessage({ type: 'SESSION_CHANGED', session: null }).catch(() => undefined);
+  void browser.runtime.sendMessage({ type: 'SESSION_CHANGED', session: null }).catch(() => undefined);
   return { ok: true };
 }
 
-/** Recupera fluxo pendente após o SW ser suspenso/reiniciado. */
+/** Recupera fluxo pendente após o SW ser suspenso/reiniciado (via alarme). */
 async function recoverPendingFlow(): Promise<void> {
   const flow = await getPendingFlow();
   if (!flow) return;
   if (isExpired(flow)) {
     await clearPendingFlow();
+    await clearAlarm();
     broadcast({ phase: 'expired', code: null, error: 'Código expirado.' });
     return;
   }
-  // Retoma o polling a partir do estado persistido.
   broadcast({ phase: 'awaiting_user', code: flow.code, error: null });
-  schedulePoll(flow, POLL_INTERVAL_MS);
+  await scheduleAlarm(POLL_INTERVAL_MS);
 }
 
 /** Localiza a aba ativa do chatgpt.com e entrega a mensagem ao content script. */
@@ -259,58 +266,57 @@ async function insertIntoChatGpt(text: string): Promise<InsertTextResult> {
   }
 }
 
+/** Handler de mensagens: retorna PROMISE (padrão compatível Chrome/Firefox). */
+function handleMessage(msg: ExtensionMessage): Promise<unknown> | void {
+  switch (msg.type) {
+    case 'START_AUTH':
+      return startFlow();
+    case 'GET_AUTH_STATUS':
+      return getAuthStatus().then((status) => ({ status }) as GetAuthStatusResult);
+    case 'GET_SESSION':
+      return getSession().then((session) => ({ session }) as GetSessionResult);
+    case 'CANCEL_FLOW':
+      return cancelFlow();
+    case 'LOGOUT':
+      return logout();
+    case 'INSERT_TEXT':
+      return insertIntoChatGpt(msg.text);
+    case 'OPEN_CHATGPT':
+      return browser.tabs.create({ url: 'https://chatgpt.com/' }).then(() => undefined);
+    default:
+      return undefined;
+  }
+}
+
 export default defineBackground(() => {
   browser.runtime.onInstalled.addListener(() => {
     console.log('[Mants] extensão instalada.');
   });
 
-  // Ao iniciar (recuperação de SW suspenso/reiniciado).
-  void recoverPendingFlow();
+  // Mensagens: listener retorna Promise (sem sendResponse/sendResponse misto).
+  browser.runtime.onMessage.addListener((msg: ExtensionMessage) => {
+    return handleMessage(msg);
+  });
 
-  browser.runtime.onMessage.addListener(
-    async (msg: ExtensionMessage, _sender, sendResponse) => {
-      switch (msg.type) {
-        case 'START_AUTH': {
-          const r = await startFlow();
-          sendResponse(r as StartAuthResult);
-          return true;
-        }
-        case 'GET_AUTH_STATUS': {
-          const status = await getAuthStatus();
-          sendResponse({ status } as GetAuthStatusResult);
-          return true;
-        }
-        case 'GET_SESSION': {
-          const session = await getSession();
-          sendResponse({ session } as GetSessionResult);
-          return true;
-        }
-        case 'CANCEL_FLOW': {
-          const r = await cancelFlow();
-          sendResponse(r as CancelFlowResult);
-          return true;
-        }
-        case 'LOGOUT': {
-          const r = await logout();
-          sendResponse(r as LogoutResult);
-          return true;
-        }
-        case 'INSERT_TEXT': {
-          const r = await insertIntoChatGpt(msg.text);
-          sendResponse(r as InsertTextResult);
-          return true;
-        }
-        case 'OPEN_CHATGPT': {
-          await browser.tabs.create({ url: 'https://chatgpt.com/' });
-          return;
-        }
-        default:
-          return false;
+  // Alarme de polling durável (sobrevive à suspensão do SW MV3).
+  browser.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name !== ALARM_NAME) return;
+    void (async () => {
+      const flow = await getPendingFlow();
+      if (!flow) {
+        await clearAlarm();
+        return;
       }
-    },
-  );
+      const prev = await getPollInterval();
+      const next = await pollAndAdvance(flow);
+      if (next > 0) {
+        // Backoff progressivo persistido (sobrevive à suspensão do SW).
+        const nextInterval = Math.min(prev + POLL_BACKOFF_STEP, POLL_MAX_INTERVAL_MS);
+        await scheduleAlarm(nextInterval);
+      }
+    })();
+  });
 
-  // O background NÃO manipula o DOM diretamente. O ChatSurfaceAdapter é usado
-  // apenas pelo content script no contexto da página do ChatGPT.
-  void ChatSurfaceAdapter;
+  // Ao iniciar (recuperação de SW suspenso/reiniciado + após reinício do navegador).
+  void recoverPendingFlow();
 });
