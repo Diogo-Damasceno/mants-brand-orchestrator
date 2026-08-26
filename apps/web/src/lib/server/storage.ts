@@ -1,5 +1,6 @@
 import { getServerConfig } from '@mants/config';
 import { createHash } from 'node:crypto';
+import { JSDOM } from 'jsdom';
 
 export interface StorageObject {
   key: string;
@@ -105,11 +106,8 @@ export function validateUpload(mime: string, size: number): void {
  * Remove scripts, handlers de evento, referências externas e URLs perigosos.
  * Não usa apenas regex.
  */
-export function sanitizeSvg(content: string): string {
+export async function sanitizeSvg(content: string): Promise<string> {
   try {
-    // jsdom é dependência de dev/runtime do servidor; fallback conservador se ausente.
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { JSDOM } = require('jsdom') as { JSDOM: typeof import('jsdom').JSDOM };
     const dom = new JSDOM(content, { contentType: 'image/svg+xml' });
     const doc = dom.window.document;
     doc.querySelectorAll('script').forEach((n) => n.remove());

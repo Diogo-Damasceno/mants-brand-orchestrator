@@ -82,6 +82,6 @@ export function json(data: unknown, status = 200): NextResponse {
 
 export function errorResponse(err: unknown): NextResponse {
   if (err instanceof HttpError) return NextResponse.json({ error: err.message }, { status: err.status });
-  console.error('Erro não tratado:', err);
+  console.error('Erro não tratado:', err); // eslint-disable-line no-console
   return NextResponse.json({ error: 'Erro interno.' }, { status: 500 });
 }

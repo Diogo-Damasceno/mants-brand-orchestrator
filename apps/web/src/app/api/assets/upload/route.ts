@@ -26,7 +26,7 @@ export async function POST(req: NextRequest) {
 
     let content = buffer;
     if (realMime === 'image/svg+xml') {
-      content = Buffer.from(sanitizeSvg(buffer.toString('utf8')), 'utf8');
+      content = Buffer.from(await sanitizeSvg(buffer.toString('utf8')), 'utf8');
     }
 
     // Limite de storage por plano (contagem transacional via SUM).
