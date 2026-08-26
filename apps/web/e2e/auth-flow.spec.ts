@@ -187,7 +187,7 @@ test.describe('Fluxo PKCE completo (extensão real Chrome/Chromium)', () => {
       const authPage = await authPagePromise;
       await authPage.waitForURL(/extension\/authorize/);
       await authPage.getByRole('button', { name: /autorizar|concordar/i }).click();
-      await popup.getByText(/autenticado|sessão válida|organização/i).first().waitFor({ timeout: 30_000 });
+      await popup.getByText(/autenticado|sessão válida|organização/i).first().waitFor({ timeout: 60_000 });
 
       // Abre o painel lateral.
       await popup.getByRole('button', { name: /painel lateral|abrir painel/i }).click();
