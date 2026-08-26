@@ -47,8 +47,13 @@ function apiFetch(method: string, p: string, body?: unknown, cookie?: string): P
 
 async function requireAppUp(timeoutMs = 60_000, intervalMs = 2_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
-  while (true) {
-    try { const r = await apiFetch('GET', '/api/health'); if (r.status === 200) return; } catch { /* retry */ }
+  for (let waited = 0; ; waited += intervalMs) {
+    try {
+      const r = await apiFetch('GET', '/api/health');
+      if (r.status === 200) return;
+    } catch {
+      /* retry */
+    }
     if (Date.now() >= deadline) throw new Error(`App não ficou pronto em ${timeoutMs}ms.`);
     await new Promise((r) => setTimeout(r, intervalMs));
   }
@@ -118,17 +123,64 @@ async function seedState(): Promise<{ seed: Seed; cookie: string; setCookie: str
   const client = await apiFetch('POST', '/api/clients', { name: `Cliente ${uid()}` }, cookie);
   if (client.status !== 201) throw new Error(`cliente: ${client.status}`);
   const clientId = (client.json as { id: string }).id;
-  const bk = await apiFetch('POST', '/api/brand-kits', { name: `BK ${uid()}`, recommendedWords: [], prohibitedWords: [], brandExpressions: [], colors: [], fonts: [], approvedLogos: [], logoVariations: [], icons: [], graphicElements: [], approvedPhotos: [], references: [], approvedExamples: [], rejectedExamples: [], approvedCtas: [], clientId }, cookie);
+  const bk = await apiFetch(
+    'POST',
+    '/api/brand-kits',
+    {
+      name: `BK ${uid()}`,
+      recommendedWords: [],
+      prohibitedWords: [],
+      brandExpressions: [],
+      colors: [],
+      fonts: [],
+      approvedLogos: [],
+      logoVariations: [],
+      icons: [],
+      graphicElements: [],
+      approvedPhotos: [],
+      references: [],
+      approvedExamples: [],
+      rejectedExamples: [],
+      approvedCtas: [],
+      clientId,
+    },
+    cookie,
+  );
   if (bk.status !== 201) throw new Error(`brand-kit: ${bk.status}`);
   const brandKitId = (bk.json as { id: string }).id;
-  const camp = await apiFetch('POST', '/api/campaigns', { name: `Camp ${uid()}`, clientId, brandKitId, mandatoryContent: [], prohibitedContent: [], references: [], selectedAssetIds: [], promptMode: 'professional', variations: 1 }, cookie);
+  const camp = await apiFetch(
+    'POST',
+    '/api/campaigns',
+    {
+      name: `Camp ${uid()}`,
+      clientId,
+      brandKitId,
+      mandatoryContent: [],
+      prohibitedContent: [],
+      references: [],
+      selectedAssetIds: [],
+      promptMode: 'professional',
+      variations: 1,
+    },
+    cookie,
+  );
   if (camp.status !== 201) throw new Error(`campanha: ${camp.status}`);
   const campaignId = (camp.json as { id: string }).id;
 
   // Upload multipart real (PNG fixture) exigido pela rota /api/assets/upload.
   const boundary = `----mants${uid()}`;
   const fileBuf = fs.readFileSync(FIXTURE_PNG);
-  const meta = JSON.stringify({ originalName: 'logo.png', mimeType: 'image/png', sizeBytes: fileBuf.length, clientId, brandKitId, commercialRightsConfirmed: true });
+  // Confirma magic bytes PNG (89504e47).
+  const isPng = fileBuf.length > 4 && fileBuf[0] === 0x89 && fileBuf[1] === 0x50 && fileBuf[2] === 0x4e && fileBuf[3] === 0x47;
+  if (!isPng) throw new Error('fixture não é um PNG válido (magic bytes).');
+  const meta = JSON.stringify({
+    originalName: 'logo.png',
+    mimeType: 'image/png',
+    sizeBytes: fileBuf.length,
+    clientId,
+    brandKitId,
+    commercialRightsConfirmed: true,
+  });
   const body = Buffer.concat([
     Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="meta"\r\n\r\n${meta}\r\n`),
     Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="logo.png"\r\nContent-Type: image/png\r\n\r\n`),
@@ -176,8 +228,11 @@ test.describe('Fluxo PKCE completo (extensão real Chrome/Chromium)', () => {
       expect(me.status).toBe(200);
       expect(me.email).toBe(seed.email);
 
+      // 3) Extensão carregada + service worker disponível.
       const bg = context.serviceWorkers()[0] ?? (await context.waitForEvent('serviceworker'));
       const extId = new URL(bg.url()).hostname;
+
+      // 4) Popup aberto.
       const popup = await context.newPage();
       await popup.goto(`chrome-extension://${extId}/${popupPath}`);
       await popup.getByRole('button', { name: /entrar|login/i }).click();
@@ -217,7 +272,7 @@ test.describe('Fluxo PKCE completo (extensão real Chrome/Chromium)', () => {
 
       // 4. Download: registra a promessa ANTES do clique.
       const downloadPromise: Promise<Download> = sp.waitForEvent('download');
-      await sp.getByRole('button', { name: /baixar pacote/i }).click();
+      await sp.getByTestId('download-package').click();
       const download = await downloadPromise;
       const dlPath = path.join(os.tmpdir(), download.suggestedFilename());
       await download.saveAs(dlPath);
@@ -257,7 +312,7 @@ test.describe('Fluxo PKCE completo (extensão real Chrome/Chromium)', () => {
 // Firefox: build + manifest validados; E2E real permanece como etapa separada pendente.
 test.describe('Firefox (validação estática apenas)', () => {
   test('manifest Firefox existe', () => {
-    const fx = path.join('apps/extension/.output', 'firefox-mv2', 'manifest.json');
+    const fx = path.join('apps/extension/.output', 'firefox-mv3', 'manifest.json');
     if (!fs.existsSync(fx)) { test.skip(true, 'build Firefox não presente neste ambiente'); return; }
     const m = JSON.parse(fs.readFileSync(fx, 'utf8')) as { sidebar_action?: { default_path?: string }; browser_specific_settings?: { gecko?: { id?: string } } };
     expect(m.sidebar_action?.default_path).toBeTruthy();

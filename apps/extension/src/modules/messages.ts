@@ -73,6 +73,10 @@ export interface InsertTextResult {
 
 export interface LogoutResult {
   ok: boolean;
+  /** true quando a revogação remota falhou mas o storage local foi limpo. */
+  revokePending?: boolean;
+  /** mensagem de erro da revogação remota, se houver. */
+  error?: string;
 }
 
 export interface CancelFlowResult {

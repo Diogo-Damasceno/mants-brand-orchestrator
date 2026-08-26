@@ -1,11 +1,16 @@
 {
-  "extends": "../../tsconfig.base.json",
+  "extends": "./.wxt/tsconfig.json",
   "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
     "jsx": "react-jsx",
-    "types": ["wxt/browser", "node"],
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "strict": true,
     "noEmit": true,
-    "moduleResolution": "bundler"
+    "types": ["wxt/browser", "node"]
   },
-  "include": ["src", "wxt.config.ts", ".wxt/types"],
+  "include": ["src", "wxt.config.ts", ".wxt/types", ".wxt/wxt.d.ts"],
   "exclude": ["node_modules", ".output"]
 }

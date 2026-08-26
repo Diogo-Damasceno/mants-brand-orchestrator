@@ -26,17 +26,17 @@ Destaques:
   - Isolamento multitenant por organização (testado por integração).
   - Storage provider S3-compatível com bucket privado.
 
-## Ícones e arte promocional (PENDENTE — não gerados automaticamente)
-Os seguintes artefatos DEVEM ser adicionados antes da publicação (tamanhos obrigatórios):
-- [ ] icon-16.png (16×16)
-- [ ] icon-32.png (32×32)
-- [ ] icon-48.png (48×48)
-- [ ] icon-96.png (96×96)
-- [ ] icon-128.png (128×128)
-- [ ] Imagem promocional (440×280 ou 1400×560, conforme loja)
-- [ ] Screenshots (1280×800 ou 640×400)
-- [ ] Descrição curta e completa (acima)
+## Ícones e arte promocional
+Ícones tecnicamente gerados e validados (PNG reais, dimensões exatas, presentes no
+manifesto e nos três builds/ZIPs):
+- [x] icon-16.png (16×16)
+- [x] icon-32.png (32×32)
+- [x] icon-48.png (48×48)
+- [x] icon-96.png (96×96)
+- [x] icon-128.png (128×128)
 
-> NOTA: ícones não são gerados automaticamente — exigem aprovação visual antes da
-> publicação. Adicione os arquivos em `apps/extension/public/` e referencie-os no
-> `wxt.config.ts` (`manifest.icons`).
+PENDENTE (aprovação humana obrigatória antes da publicação):
+- [ ] Aprovação visual humana dos ícones (identidade Mants, leitura em 16×16).
+- [ ] Imagem promocional (440×280 ou 1400×560, conforme loja).
+- [ ] Screenshots (1280×800 ou 640×400).
+- [ ] Descrição curta e completa (acima) revisada por humano.

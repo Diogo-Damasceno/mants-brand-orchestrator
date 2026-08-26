@@ -153,10 +153,15 @@ export default function App() {
 
   async function onLogout() {
     setBusy(true);
-    await logout();
+    const r = await logout();
     setSession(null);
     setExpired(false);
     setBusy(false);
+    if (!r.ok) {
+      // Não afirma "revogado" se a revogação remota falhou. Informa o usuário
+      // para que ele possa revogar manualmente no dashboard.
+      setError(r.error ?? 'Falha ao revogar a sessão no servidor.');
+    }
   }
 
   async function onRetry() {
@@ -213,7 +218,7 @@ export default function App() {
       {error && status.phase !== 'expired' && <p style={{ fontSize: 12, color: '#b00' }}>{error}</p>}
 
       {!isAuthed && !inProgress && status.phase === 'idle' && (
-        <button onClick={onLogin} style={{ width: '100%', marginTop: 8 }}>
+        <button data-testid="popup-login" onClick={onLogin} style={{ width: '100%', marginTop: 8 }}>
           Entrar na Mants
         </button>
       )}
@@ -223,7 +228,7 @@ export default function App() {
           <p>Autorização iniciada.</p>
           <p>Abra a aba do Mants e autorize o dispositivo, depois retorne aqui.</p>
           <p style={{ color: '#666' }}>A conclusão ocorre automaticamente.</p>
-          <button onClick={onCancel} style={{ marginTop: 8, width: '100%' }}>
+          <button data-testid="popup-cancel" onClick={onCancel} style={{ marginTop: 8, width: '100%' }}>
             Cancelar fluxo
           </button>
         </div>
@@ -235,7 +240,7 @@ export default function App() {
       {status.phase === 'error' && !expired && (
         <>
           <p style={{ fontSize: 12, color: '#b00' }}>{status.error}</p>
-          <button onClick={onRetry} style={{ marginTop: 8, width: '100%' }}>
+          <button data-testid="popup-retry" onClick={onRetry} style={{ marginTop: 8, width: '100%' }}>
             Tentar novamente
           </button>
         </>
@@ -247,13 +252,13 @@ export default function App() {
           <p>Organização: {session.organizationId}</p>
           <p>Papel: {session.roles.join(', ')}</p>
           <p>Expira em: {new Date(session.expiresAt).toLocaleTimeString()}</p>
-          <button onClick={openDashboard} style={{ marginTop: 8, width: '100%' }}>
+          <button data-testid="popup-dashboard" onClick={openDashboard} style={{ marginTop: 8, width: '100%' }}>
             Abrir dashboard
           </button>
-          <button onClick={openSidePanelCompat} style={{ marginTop: 6, width: '100%' }}>
+          <button data-testid="popup-open-sidepanel" onClick={openSidePanelCompat} style={{ marginTop: 6, width: '100%' }}>
             Abrir painel lateral
           </button>
-          <button onClick={onLogout} style={{ marginTop: 6, width: '100%' }}>
+          <button data-testid="popup-logout" onClick={onLogout} style={{ marginTop: 6, width: '100%' }}>
             Sair (revoga sessão)
           </button>
         </div>

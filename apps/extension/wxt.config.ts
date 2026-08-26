@@ -26,9 +26,20 @@ if (BUILD_MODE === 'production' && API_BASE === 'http://localhost:3000') {
 
 const GECKO_ID = process.env.FIREFOX_GECKO_ID ?? 'mants-brand-orchestrator@mants.company';
 
+const ICONS = {
+  '16': 'icon-16.png',
+  '32': 'icon-32.png',
+  '48': 'icon-48.png',
+  '96': 'icon-96.png',
+  '128': 'icon-128.png',
+};
+
 export default defineConfig({
   srcDir: './src',
   modules: ['@wxt-dev/module-react'],
+  // Firefox: forçar Manifest V3 (MV2 é legado e incompatível com service worker
+  // e sidebar_action moderno). Chrome/Edge já são MV3 por padrão.
+  manifestVersion: 3,
   // Injeta a origem real da API e o modo de build no bundle (substitui os defines).
   vite: () => ({
     define: {
@@ -43,7 +54,13 @@ export default defineConfig({
       description:
         'Painel lateral que gera prompts e Pacotes Criativos para sua conta compatível do ChatGPT.',
       version: '0.1.0',
-      action: { default_title: 'Mants Brand Orchestrator' },
+      // Ícones declarados explicitamente em todos os builds.
+      icons: ICONS,
+      action: {
+        default_title: 'Mants Brand Orchestrator',
+        // Entrypoint HTML do popup (WXT gera popup.html a partir de entrypoints/popup/index.html).
+        default_popup: 'popup.html',
+      },
       // host_permissions DEVE corresponder à origem real (API_BASE), nunca ChatGPT.
       host_permissions: [`${API_BASE}/*`],
     };
@@ -51,7 +68,6 @@ export default defineConfig({
     if (browser === 'firefox') {
       return {
         ...base,
-        manifest_version: 3,
         permissions: ['storage', 'tabs', 'activeTab', 'alarms', 'downloads'],
         browser_specific_settings: {
           gecko: { id: GECKO_ID },
