@@ -65,8 +65,8 @@ jobs:
           docker exec mants-postgres psql -U mants -d mants_db -c "CREATE DATABASE mants_test"
       - name: Cria bucket privado (mc separado)
         run: |
-          docker run --rm --network host -e MC_HOST_local=http://mants_minio:mants_minio_secret@localhost:9000 minio/mc:RELEASE.2024-12-18T13-15-44Z mb --ignore-existing local/mants-private
-          docker run --rm --network host -e MC_HOST_local=http://mants_minio:mants_minio_secret@localhost:9000 minio/mc:RELEASE.2024-12-18T13-15-44Z anonymous set local/mants-private none
+          docker run --rm --network host -e MC_HOST_local=http://mants_minio:mants_minio_secret@localhost:9000 minio/mc:RELEASE.2024-11-21T17-21-54Z mb --ignore-existing local/mants-private
+          docker run --rm --network host -e MC_HOST_local=http://mants_minio:mants_minio_secret@localhost:9000 minio/mc:RELEASE.2024-11-21T17-21-54Z anonymous set local/mants-private none
       - name: Migrations
         run: pnpm db:migrate
       - name: Unitários
