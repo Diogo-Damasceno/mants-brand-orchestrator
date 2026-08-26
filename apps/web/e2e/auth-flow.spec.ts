@@ -137,7 +137,7 @@ async function seedState(): Promise<{ seed: Seed; cookie: string }> {
   ]);
   const asset = await new Promise<ApiResult>((resolve, reject) => {
     const u = new URL('/api/assets/upload', APP_URL); const lib = u.protocol === 'https:' ? https : http;
-    const r = lib.request(u, { method: 'POST', headers: { 'content-type': `multipart/form-data; boundary=${boundary}`, authorization: `Bearer ${cookie}` } }, (res) => {
+    const r = lib.request(u, { method: 'POST', headers: { 'content-type': `multipart/form-data; boundary=${boundary}`, ...(cookie ? { cookie } : {}) } }, (res) => {
       let raw = ''; res.on('data', (c) => (raw += c));
       res.on('end', () => resolve({ status: res.statusCode ?? 0, json: raw ? JSON.parse(raw) : null, headers: res.headers, setCookie: [] }));
     });
