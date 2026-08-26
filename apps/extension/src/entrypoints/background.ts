@@ -219,9 +219,19 @@ async function logout(): Promise<LogoutResult> {
   const session = await getSession<{ token: string }>();
   if (session?.token) {
     try {
+      // Tenta revogar remotamente ANTES de limpar o storage local. Se falhar,
+      // NÃO afirma revogação remota: marca como pendente e limpa localmente, mas
+      // retorna erro explícito ao popup (que decide a UX). O sistema nunca deve
+      // dizer "revogado" se a chamada de revogação falhou.
       await import('../modules/api').then((m) => m.revokeSession(session.token));
-    } catch {
-      /* ignore */
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Falha ao revogar sessão no servidor.';
+      await clearSession();
+      await clearPendingFlow();
+      await clearAlarm();
+      broadcast(idleStatus());
+      void browser.runtime.sendMessage({ type: 'SESSION_CHANGED', session: null }).catch(() => undefined);
+      return { ok: false, revokePending: true, error: msg };
     }
   }
   await clearSession();

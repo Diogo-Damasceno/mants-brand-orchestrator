@@ -1,15 +1,15 @@
 import { useState, useEffect } from 'react';
-import { getSession, clearSession } from '../modules/storage';
-import { getApiBase, registerPromptUsage, downloadPackageBlob, type Session } from '../modules/api';
+import { getSession, clearSession } from '../../modules/storage';
+import { getApiBase, registerPromptUsage, downloadPackageBlob, type Session } from '../../modules/api';
 import {
   extGet,
   extPost,
   extPatch,
   getPublicConfig,
   validateExtensionSession,
-} from '../modules/extension-client';
+} from '../../modules/extension-client';
 import browser from 'webextension-polyfill';
-import { filterBrandKitsByClient } from '../modules/sidepanel-filter';
+import { filterBrandKitsByClient } from '../../modules/sidepanel-filter';
 
 interface Option {
   id: string;
@@ -25,7 +25,7 @@ interface PromptResult {
   prompt: { originalText: string };
 }
 
-export default defineSidepanel(() => {
+export default function SidepanelApp() {
   const [status, setStatus] = useState('Carregando…');
   const [error, setError] = useState('');
   const [session, setSession] = useState<Session | null>(null);
@@ -278,8 +278,12 @@ export default defineSidepanel(() => {
       <h1 style={{ fontSize: 14, fontWeight: 700 }}>Mants — Painel lateral</h1>
       <p style={{ color: '#666' }}>Org: {session?.organizationId || '—'}</p>
 
-      <label>Cliente
-        <select value={client} onChange={(e) => {
+      <label htmlFor="sp-client">Cliente</label>
+      <select
+        id="sp-client"
+        data-testid="select-client"
+        value={client}
+        onChange={(e) => {
           const v = e.target.value;
           setClient(v);
           // Limpa cascata ao trocar de cliente (isolamento por cliente).
@@ -291,81 +295,131 @@ export default defineSidepanel(() => {
           setEdited('');
           setPromptId('');
           if (session) void loadBrandKits(session.token, v);
-        }} style={{ width: '100%' }}>
-          <option value="">— selecione —</option>
-          {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </select>
-      </label>
-      <label>Brand Kit
-        <select value={brandKit} onChange={(e) => { setBrandKit(e.target.value); if (e.target.value) { void loadCampaigns(session!.token, e.target.value); void loadAssets(session!.token, e.target.value); } }} style={{ width: '100%' }}>
-          <option value="">— selecione —</option>
-          {brandKits.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-        </select>
-      </label>
-      <label>Campanha
-        <select value={campaign} onChange={(e) => setCampaign(e.target.value)} style={{ width: '100%' }}>
-          <option value="">— nova —</option>
-          {campaigns.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </select>
-      </label>
+        }}
+        style={{ width: '100%' }}
+      >
+        <option value="">— selecione —</option>
+        {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+      </select>
 
-      <label>Formato
-        <select value={format} onChange={(e) => setFormat(e.target.value)} style={{ width: '100%' }}>
-          <option value="post_instagram">Post Instagram</option>
-          <option value="story">Story</option>
-          <option value="carousel">Carrossel</option>
-          <option value="banner">Banner</option>
-          <option value="ad">Anúncio</option>
-          <option value="promo_campaign">Campanha promocional</option>
-          <option value="launch">Lançamento</option>
-          <option value="institutional">Institucional</option>
-          <option value="holiday">Data comemorativa</option>
-          <option value="caption">Legenda</option>
-          <option value="copy">Copy</option>
-          <option value="visual_direction">Direção visual</option>
-          <option value="artwork_variation">Variação de arte</option>
-        </select>
-      </label>
-      <label>Modo
-        <select value={mode} onChange={(e) => setMode(e.target.value as typeof mode)} style={{ width: '100%' }}>
-          <option value="essential">Essencial</option>
-          <option value="professional">Profissional</option>
-          <option value="strict_branding">Branding estrito</option>
-          <option value="creative_exploration">Exploração criativa</option>
-        </select>
-      </label>
+      <label htmlFor="sp-brandkit">Brand Kit</label>
+      <select
+        id="sp-brandkit"
+        data-testid="select-brandkit"
+        value={brandKit}
+        onChange={(e) => {
+          setBrandKit(e.target.value);
+          if (e.target.value) {
+            void loadCampaigns(session!.token, e.target.value);
+            void loadAssets(session!.token, e.target.value);
+          }
+        }}
+        style={{ width: '100%' }}
+      >
+        <option value="">— selecione —</option>
+        {brandKits.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+      </select>
 
-      <label>Objetivo<textarea value={objective} onChange={(e) => setObjective(e.target.value)} style={{ width: '100%' }} /></label>
-      <label>Produto/serviço<textarea value={product} onChange={(e) => setProduct(e.target.value)} style={{ width: '100%' }} /></label>
-      <label>Público<input value={audience} onChange={(e) => setAudience(e.target.value)} style={{ width: '100%' }} /></label>
-      <label>Oferta<input value={offer} onChange={(e) => setOffer(e.target.value)} style={{ width: '100%' }} /></label>
-      <label>CTA<input value={cta} onChange={(e) => setCta(e.target.value)} style={{ width: '100%' }} /></label>
-      <label>Conteúdo obrigatório (um por linha)<textarea value={mandatory} onChange={(e) => setMandatory(e.target.value)} style={{ width: '100%' }} /></label>
-      <label>Conteúdo proibido (um por linha)<textarea value={prohibited} onChange={(e) => setProhibited(e.target.value)} style={{ width: '100%' }} /></label>
+      <label htmlFor="sp-campaign">Campanha</label>
+      <select
+        id="sp-campaign"
+        data-testid="select-campaign"
+        value={campaign}
+        onChange={(e) => setCampaign(e.target.value)}
+        style={{ width: '100%' }}
+      >
+        <option value="">— nova —</option>
+        {campaigns.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+      </select>
+
+      <label htmlFor="sp-format">Formato</label>
+      <select
+        id="sp-format"
+        data-testid="select-format"
+        value={format}
+        onChange={(e) => setFormat(e.target.value)}
+        style={{ width: '100%' }}
+      >
+        <option value="post_instagram">Post Instagram</option>
+        <option value="story">Story</option>
+        <option value="carousel">Carrossel</option>
+        <option value="banner">Banner</option>
+        <option value="ad">Anúncio</option>
+        <option value="promo_campaign">Campanha promocional</option>
+        <option value="launch">Lançamento</option>
+        <option value="institutional">Institucional</option>
+        <option value="holiday">Data comemorativa</option>
+        <option value="caption">Legenda</option>
+        <option value="copy">Copy</option>
+        <option value="visual_direction">Direção visual</option>
+        <option value="artwork_variation">Variação de arte</option>
+      </select>
+
+      <label htmlFor="sp-mode">Modo</label>
+      <select
+        id="sp-mode"
+        data-testid="select-mode"
+        value={mode}
+        onChange={(e) => setMode(e.target.value as typeof mode)}
+        style={{ width: '100%' }}
+      >
+        <option value="essential">Essencial</option>
+        <option value="professional">Profissional</option>
+        <option value="strict_branding">Branding estrito</option>
+        <option value="creative_exploration">Exploração criativa</option>
+      </select>
+
+      <label htmlFor="sp-objective">Objetivo</label>
+      <textarea id="sp-objective" data-testid="input-objective" value={objective} onChange={(e) => setObjective(e.target.value)} style={{ width: '100%' }} />
+
+      <label htmlFor="sp-product">Produto/serviço</label>
+      <textarea id="sp-product" data-testid="input-product" value={product} onChange={(e) => setProduct(e.target.value)} style={{ width: '100%' }} />
+
+      <label htmlFor="sp-audience">Público</label>
+      <input id="sp-audience" data-testid="input-audience" value={audience} onChange={(e) => setAudience(e.target.value)} style={{ width: '100%' }} />
+
+      <label htmlFor="sp-offer">Oferta</label>
+      <input id="sp-offer" data-testid="input-offer" value={offer} onChange={(e) => setOffer(e.target.value)} style={{ width: '100%' }} />
+
+      <label htmlFor="sp-cta">CTA</label>
+      <input id="sp-cta" data-testid="input-cta" value={cta} onChange={(e) => setCta(e.target.value)} style={{ width: '100%' }} />
+
+      <label htmlFor="sp-mandatory">Conteúdo obrigatório (um por linha)</label>
+      <textarea id="sp-mandatory" data-testid="input-mandatory" value={mandatory} onChange={(e) => setMandatory(e.target.value)} style={{ width: '100%' }} />
+
+      <label htmlFor="sp-prohibited">Conteúdo proibido (um por linha)</label>
+      <textarea id="sp-prohibited" data-testid="input-prohibited" value={prohibited} onChange={(e) => setProhibited(e.target.value)} style={{ width: '100%' }} />
 
       <p style={{ fontWeight: 600 }}>Ativos recomendados</p>
       <div style={{ maxHeight: 120, overflow: 'auto', border: '1px solid #ddd', padding: 4 }}>
         {assets.length === 0 && <span style={{ color: '#888' }}>Nenhum ativo para este Brand Kit.</span>}
         {assets.map((a) => (
           <label key={a.id} style={{ display: 'block' }}>
-            <input type="checkbox" checked={selectedAssets.includes(a.id)} onChange={() => toggleAsset(a.id)} /> {a.originalName}
+            <input
+              type="checkbox"
+              data-testid={`asset-${a.id}`}
+              checked={selectedAssets.includes(a.id)}
+              onChange={() => toggleAsset(a.id)}
+            />{' '}
+            {a.originalName}
           </label>
         ))}
       </div>
 
-      <button onClick={onGenerate} style={{ marginTop: 8, width: '100%' }}>Gerar prompt</button>
-      <label>Pré-visualização / Edição
-        <textarea value={edited} onChange={(e) => setEdited(e.target.value)} rows={8} style={{ width: '100%' }} readOnly={!prompt} />
-      </label>
-      <button onClick={onSaveEdit} style={{ width: '100%' }}>Salvar edição</button>
+      <button data-testid="generate-prompt" onClick={onGenerate} style={{ marginTop: 8, width: '100%' }}>Gerar prompt</button>
+
+      <label htmlFor="sp-edited">Pré-visualização / Edição</label>
+      <textarea id="sp-edited" data-testid="input-edited" value={edited} onChange={(e) => setEdited(e.target.value)} rows={8} style={{ width: '100%' }} readOnly={!prompt} />
+
+      <button data-testid="save-edit" onClick={onSaveEdit} style={{ width: '100%' }}>Salvar edição</button>
 
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
-        <button onClick={onCopy}>Copiar prompt</button>
-        <button onClick={onInsert}>Inserir (exp.)</button>
-        <button onClick={onDownload}>Baixar pacote</button>
-        <button onClick={onOpenChat}>Abrir ChatGPT</button>
-        <button onClick={onRegisterUsed}>Registrar uso</button>
-        <button onClick={onImportResult}>Importar resultado</button>
+        <button data-testid="copy-prompt" onClick={onCopy}>Copiar prompt</button>
+        <button data-testid="insert-prompt" onClick={onInsert}>Inserir (exp.)</button>
+        <button data-testid="download-package" onClick={onDownload}>Baixar pacote</button>
+        <button data-testid="open-chatgpt" onClick={onOpenChat}>Abrir ChatGPT</button>
+        <button data-testid="register-usage" onClick={onRegisterUsed}>Registrar uso</button>
+        <button data-testid="import-result" onClick={onImportResult}>Importar resultado</button>
       </div>
       <p style={{ color: '#444', marginTop: 8 }}>{status}</p>
       {error && <p style={{ color: '#b00', marginTop: 8 }}>{error}</p>}
@@ -374,4 +428,4 @@ export default defineSidepanel(() => {
       </p>
     </div>
   );
-});
+}

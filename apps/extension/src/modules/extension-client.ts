@@ -2,7 +2,7 @@
  * Cliente central de comunicação popup/sidepanel <-> background.
  * Centraliza tratamento de 401 (sessão expirada) para limpar e solicitar login.
  */
-import type { ExtensionMessage, AuthStatus } from './messages';
+import type { ExtensionMessage, AuthStatus, LogoutResult } from './messages';
 import { clearSession } from './storage';
 import { getApiBase } from './api';
 
@@ -65,8 +65,8 @@ export async function cancelFlow(): Promise<{ ok: boolean }> {
   return send<{ ok: boolean }>({ type: 'CANCEL_FLOW' });
 }
 
-export async function logout(): Promise<{ ok: boolean }> {
-  return send<{ ok: boolean }>({ type: 'LOGOUT' });
+export async function logout(): Promise<LogoutResult> {
+  return send<LogoutResult>({ type: 'LOGOUT' });
 }
 
 /** Resultado estruturado da validação de sessão no backend. */

@@ -21,8 +21,9 @@ export async function GET() {
 
   // 2. Migrations aplicadas
   try {
-    const rows = await getDb().execute(sql`select count(*)::int as n from _mants_migrations`);
-    const n = (rows as unknown as { n: number }[])[0]?.n ?? 0;
+    const res = await getDb().execute(sql`select count(*)::int as n from _mants_migrations`);
+    const rows = (res as unknown as { rows: Array<{ n: number }> }).rows;
+    const n = rows?.[0]?.n ?? 0;
     if (n === 0) problems.push('no_migrations');
   } catch {
     problems.push('migrations_table_missing');

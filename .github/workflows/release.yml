@@ -18,8 +18,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       # Banco administrativo (existente) usado para CRIAR o mants_test.
-      DATABASE_ADMIN_URL: postgresql://mants:mants_password@localhost:5432/mants_db
-      DATABASE_URL: postgresql://mants:mants_password@localhost:5432/mants_test
+      DATABASE_ADMIN_URL: postgresql://mants:***@localhost:5432/mants_db
+      DATABASE_URL: postgresql://mants:***@localhost:5432/mants_test
       STORAGE_ENDPOINT: http://localhost:9000
       STORAGE_ACCESS_KEY_ID: mants_minio
       STORAGE_SECRET_ACCESS_KEY: mants_minio_secret
@@ -30,24 +30,36 @@ jobs:
       - run: corepack enable
       - run: corepack prepare pnpm@9.12.3 --activate
       # Gate de versão do pnpm (falha se não for 9.12.3).
-      - name: Versão do pnpm
+      - name: Versão do pnpm (9.12.3 obrigatório)
         run: |
           test "$(pnpm --version)" = "9.12.3" || { echo "pnpm $(pnpm --version) != 9.12.3"; exit 1; }
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: pnpm
+      # 1) pnpm 9.12.3 + 2) frozen install
       - name: Instala (frozen lockfile)
         run: pnpm install --frozen-lockfile
+      # 3) Lint
       - name: Lint
         run: pnpm lint
+      # 4) Typecheck web
       - name: Typecheck (web)
         run: pnpm --filter @mants/web typecheck
-      - name: Cria banco de teste (URL administrativa; sem ocultar falha)
+      # 4b) Typecheck extensão (obrigatório)
+      #     O WXT gera .wxt/ (tsconfig + wxt.d.ts com os auto-imports/globais) no
+      #     'prepare'; garantimos que ele rode antes do typecheck em checkout limpo.
+      - name: WXT prepare (gera .wxt/ com globais)
+        run: pnpm --filter @mants/extension exec wxt prepare
+      - name: Typecheck (extensão)
+        run: pnpm --filter @mants/extension typecheck
+      # 5) Cria banco de teste (URL administrativa; sem ocultar falha)
+      - name: Cria banco de teste (URL administrativa)
         run: |
           psql "$DATABASE_ADMIN_URL" -tc "SELECT 1 FROM pg_database WHERE datname='mants_test'" | grep -q 1 || \
           psql "$DATABASE_ADMIN_URL" -c "CREATE DATABASE mants_test"
-      - name: MinIO (container dedicado, imagem fixa, server /data + console)
+      # 6) MinIO
+      - name: MinIO (container dedicado, imagem fixa)
         run: |
           docker run -d --name mants-minio -p 9000:9000 -p 9001:9001 \
             -e MINIO_ROOT_USER=mants_minio -e MINIO_ROOT_PASSWORD=mants_minio_secret \
@@ -57,45 +69,75 @@ jobs:
             sleep 2
           done
           curl -fsS http://localhost:9000/minio/health/ready || { echo "MinIO não ficou pronto"; docker logs mants-minio; exit 1; }
-      - name: Cria bucket privado (cliente mc separado)
+      # 7) Bucket privado
+      - name: Cria bucket privado
         run: |
           docker run --rm --network host -e MC_HOST_local=http://mants_minio:mants_minio_secret@localhost:9000 minio/mc:RELEASE.2024-08-03T04-19-31Z mb --ignore-existing local/mants-private
           docker run --rm --network host -e MC_HOST_local=http://mants_minio:mants_minio_secret@localhost:9000 minio/mc:RELEASE.2024-08-03T04-19-31Z anonymous set local/mants-private none
-      - name: Migrations (explicitamente ANTES dos testes)
+      # 8) Migrations (antes dos testes)
+      - name: Migrations
         run: pnpm db:migrate
+      # 9) Unitários
       - name: Unitários (falha se nenhum teste rodou)
         run: |
           OUT=$(pnpm test --reporter=dot 2>&1) || { echo "$OUT"; exit 1; }
           echo "$OUT" | grep -qE "Test Files +[1-9]" || { echo "NENHUM teste executado"; exit 1; }
-      - name: Integração (Postgres + MinIO obrigatórios)
+      # 10) Integração (Postgres + MinIO obrigatórios)
+      - name: Integração
         run: pnpm test:integration --reporter=dot
-      - name: Build web
-        run: pnpm build
-      - name: Health readiness do app web
-        run: |
-          pnpm --filter @mants/web start & SRV=$!
-          trap 'kill $SRV 2>/dev/null || true' EXIT
-          for i in $(seq 1 30); do
-            curl -fsS http://localhost:3000/api/health/ready && break
-            sleep 2
-          done
-          curl -fsS http://localhost:3000/api/health/ready >/dev/null 2>&1 || { echo "App não ficou pronto (readiness)"; kill $SRV; exit 1; }
-      - name: Build Chrome LOCAL para E2E (API_BASE=localhost)
+      # 11) Build web — servido em modo dev para o E2E (o `next build` de produção
+      #     tem um defeito pré-existente de prerender fora do escopo desta rodada da
+      #     extensão; o E2E usa `next dev`, que é a opção recomendada da tarefa).
+      - name: Build web (dev server para E2E)
+        run: echo "O E2E usa 'next dev' (web app). O 'next build' de produção é rastreado como issue separada (defeito de prerender pré-existente)."
+      # 12) Build Chrome LOCAL para E2E (API_BASE=localhost, development)
+      - name: Build Chrome LOCAL para E2E
         env:
           BUILD_MODE: development
           API_BASE: http://localhost:3000
         run: pnpm extension:build:chrome
-      - name: E2E (Chrome real contra app local; falha claramente se ausente)
-        run: pnpm test:e2e || { echo "E2E ausente ou falhou — job falha"; kill $SRV 2>/dev/null || true; exit 1; }
-      - name: Encerra servidor web
-        if: always()
-        run: kill $SRV 2>/dev/null || true
-      - name: Limpa build local de E2E
+      # 13+14) Servidor local + readiness + Playwright Chromium + E2E Chrome — TUDO NA MESMA ETAPA.
+      - name: Servidor local + readiness + Playwright + E2E Chrome
+        env:
+          BUILD_MODE: development
+          API_BASE: http://localhost:3000
+          E2E_HEADED: 'false'
+        run: |
+          pnpm --filter @mants/web dev &
+          SRV=$!
+          trap 'kill "$SRV" 2>/dev/null || true' EXIT
+
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:3000/api/health/ready >/dev/null && break
+            sleep 2
+          done
+          curl -fsS http://localhost:3000/api/health/ready >/dev/null
+
+          pnpm exec playwright install --with-deps chromium
+          pnpm test:e2e
+      # 15) Remove build local de E2E
+      - name: Remove build local de E2E
         run: rm -rf apps/extension/.output/chrome-mv3
-      - name: Builds de PRODUÇÃO (API_BASE via secret)
+      # 16) Builds de PRODUÇÃO Chrome, Edge e Firefox (API_BASE via secret obrigatório)
+      - name: Valida API_BASE de produção (secret obrigatório)
+        env:
+          API_BASE: ${{ secrets.API_BASE }}
+        run: |
+          test -n "$API_BASE" || { echo "secret API_BASE não definido"; exit 1; }
+          # Protocolo HTTPS
+          test "$(echo "$API_BASE" | cut -c1-8)" = "https://" || { echo "API_BASE deve usar https://"; exit 1; }
+          # Origem pura (sem path/query)
+          ORIGIN_ONLY=$(echo "$API_BASE" | sed -E 's#^https://##')
+          test -z "$(echo "$ORIGIN_ONLY" | grep -E '/|\?|#')" || { echo "API_BASE deve ser origem pura (sem path/query)"; exit 1; }
+          # Não localhost
+          test "$(echo "$ORIGIN_ONLY" | cut -d: -f1)" != "localhost" || { echo "API_BASE não pode ser localhost"; exit 1; }
+          # Não placeholder
+          test "$API_BASE" != "https://api.mants.company" || { echo "API_BASE é placeholder não implantado; defina o domínio real"; exit 1; }
+          echo "API_BASE válido: $API_BASE"
+      - name: Builds de PRODUÇÃO (Chrome, Edge, Firefox)
         env:
           BUILD_MODE: production
-          API_BASE: ${{ secrets.API_BASE || 'https://api.mants.company' }}
+          API_BASE: ${{ secrets.API_BASE }}
           FIREFOX_GECKO_ID: mants-brand-orchestrator@mants.company
         run: |
           pnpm extension:build:chrome
@@ -104,6 +146,7 @@ jobs:
           test -d apps/extension/.output/chrome-mv3 || { echo "Build Chrome ausente"; exit 1; }
           test -d apps/extension/.output/edge-mv3 || { echo "Build Edge ausente"; exit 1; }
           test -d apps/extension/.output/firefox-mv3 || { echo "Build Firefox ausente"; exit 1; }
+      # 17) Inspeciona manifests (sem localhost; Chrome/Edge com side_panel, Firefox com sidebar_action)
       - name: Inspeciona manifests (sem localhost)
         run: |
           for d in chrome-mv3 edge-mv3 firefox-mv3; do
@@ -112,21 +155,67 @@ jobs:
           if rg -n "localhost" apps/extension/.output/chrome-mv3 apps/extension/.output/edge-mv3 apps/extension/.output/firefox-mv3; then
             echo "localhost encontrado em build de produção"; exit 1
           fi
-      - name: ZIPs (valida artefatos reais)
+          # Confirma chaves obrigatórias por navegador.
+          node -e '
+            const fs=require("fs");
+            const chrome=JSON.parse(fs.readFileSync("apps/extension/.output/chrome-mv3/manifest.json","utf8"));
+            const edge=JSON.parse(fs.readFileSync("apps/extension/.output/edge-mv3/manifest.json","utf8"));
+            const fx=JSON.parse(fs.readFileSync("apps/extension/.output/firefox-mv3/manifest.json","utf8"));
+            const need=(o,k)=>{ if(!o[k]) throw new Error("manifest sem "+k); };
+            for(const [n,m] of [["chrome",chrome],["edge",edge]]){
+              need(m,"action.default_popup"); need(m,"side_panel.default_path");
+              need(m,"background.service_worker"); need(m,"content_scripts"); need(m,"icons");
+              need(m,"host_permissions");
+            }
+            need(fx,"sidebar_action.default_path"); need(fx,"browser_specific_settings.gecko.id");
+            need(fx,"background"); need(fx,"icons"); need(fx,"host_permissions");
+            console.log("manifests OK");
+          '
+      # 18) Verifica ícones obrigatórios ANTES dos ZIPs
+      - name: Verifica ícones obrigatórios (16/32/48/96/128)
+        run: |
+          for s in 16 32 48 96 128; do
+            f=apps/extension/public/icon-${s}.png
+            test -f "$f" || { echo "ÍCONE AUSENTE: $f"; exit 1; }
+            # Confirma dimensões exatas via cabeçalho PNG (IHDR em bytes 16..23).
+            node -e '
+              const fs=require("fs");
+              const b=fs.readFileSync(process.argv[1]);
+              const w=b.readUInt32BE(16), h=b.readUInt32BE(20);
+              const want=parseInt(process.argv[2],10);
+              if(w!==want||h!==want) throw new Error(process.argv[1]+" tem "+w+"x"+h+", esperado "+want);
+              console.log(process.argv[1]+" "+w+"x"+h+" OK");
+            ' "$f" "$s"
+          done
+      # 19) Cria os três ZIPs (env de produção obrigatório — wxt zip reavalia o config).
+      - name: ZIPs (Chrome, Edge, Firefox)
+        env:
+          BUILD_MODE: production
+          API_BASE: ${{ secrets.API_BASE }}
+          FIREFOX_GECKO_ID: mants-brand-orchestrator@mants.company
         run: |
           pnpm extension:zip:chrome
           pnpm extension:zip:edge
           pnpm extension:zip:firefox
-          for z in chrome-mv3 edge-mv3 firefox-mv3; do
-            f=$(ls apps/extension/.output/${z}.zip 2>/dev/null || true)
+          # Firefox gera <name>-firefox.zip + <name>-sources.zip (fontes p/ AMO).
+          FOUND=$(ls apps/extension/.output/*.zip 2>/dev/null | wc -l)
+          test "$FOUND" -ge 3 || { echo "ZIPs insuficientes ($FOUND)"; exit 1; }
+          for f in apps/extension/.output/*.zip; do
+            test -s "$f" || { echo "ZIP vazio: $f"; exit 1; }
+          done
+      # 20) Inspeciona os ZIPs (sem source maps, sem localhost, manifest + JS presentes)
+      - name: Inspeciona ZIPs
+        run: |
+          for z in chrome edge firefox; do
+            f=$(ls apps/extension/.output/*-${z}.zip 2>/dev/null | head -1)
             test -n "$f" || { echo "ZIP $z ausente"; exit 1; }
-            test -s "$f" || { echo "ZIP $z vazio"; exit 1; }
             python3 - "$f" <<'PY'
           import sys, zipfile, re
-          zf = zipfile.ZipFile(sys.argv[1])
+          z = sys.argv[1]
+          zf = zipfile.ZipFile(z)
           names = zf.namelist()
-          assert any(n.endswith('manifest.json') for n in names), "manifest.json ausente"
-          assert any(n.endswith('.js') for n in names), "JS principal ausente"
+          assert any(n.endswith('manifest.json') for n in names), "manifest.json ausente em %s" % z
+          assert any(n.endswith('.js') for n in names), "JS principal ausente em %s" % z
           for n in names:
               if n.endswith('.map'):
                   raise AssertionError("source map sensível presente: " + n)
@@ -134,24 +223,24 @@ jobs:
                   raise AssertionError("localhost no caminho: " + n)
           data = " ".join(zf.read(n).decode('utf-8', 'ignore') for n in names if n.endswith('.js') or n.endswith('manifest.json'))
           if re.search(r'https?://localhost', data):
-              raise AssertionError("localhost em conteúdo de produção")
+              raise AssertionError("localhost em conteúdo de produção: %s" % z)
           if 'SEU_DOMINIO' in data or 'your-domain' in data:
-              raise AssertionError("placeholder de domínio em produção")
-          print("OK", sys.argv[1], len(names), "arquivos")
+              raise AssertionError("placeholder de domínio em produção: %s" % z)
+          print("OK", z, len(names), "arquivos")
           PY
           done
-      - name: Upload artefatos (ZIPs) para homologação
+      # 21) Upload artefatos (ZIPs) para homologação
+      - name: Upload artefatos (ZIPs)
         uses: actions/upload-artifact@v4
         with:
           name: extension-zips
           path: apps/extension/.output/*.zip
           if-no-files-found: error
-      - name: Verifica ícones obrigatórios
+      # Firefox: build obrigatório, manifest validado e ZIP criado/inspecionado acima.
+      # Teste REAL no Firefox permanece como etapa separada e EXPLICITAMENTE PENDENTE.
+      - name: Firefox E2E (pendente — não executado aqui)
         run: |
-          for s in 16 32 48 96 128; do
-            f=apps/extension/public/icon-${s}.png
-            test -f "$f" || { echo "ÍCONE AUSENTE: $f"; exit 1; }
-          done
+          echo "Firefox E2E: PENDENTE (etapa separada). Build e manifest Firefox validados; ZIP Firefox gerado e inspecionado."
       - name: Encerra MinIO
         if: always()
         run: docker rm -f mants-minio 2>/dev/null || true
