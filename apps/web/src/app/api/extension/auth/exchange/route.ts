@@ -1,3 +1,4 @@
+import { NextRequest } from 'next/server';
 import { timingSafeEqual } from 'node:crypto';
 import { getDb, schema } from '@mants/database';
 import { eq, and, isNull, gt } from 'drizzle-orm';
@@ -55,6 +56,9 @@ export async function POST(req: NextRequest) {
       }
       if (!codeRow.userId || !codeRow.organizationId) {
         throw new HttpError(400, 'Código não autorizado pelo usuário.');
+      }
+      if (!codeRow.authorizedAt) {
+        throw new HttpError(400, 'Código ainda não foi autorizado pelo usuário.');
       }
       if (codeRow.deviceId !== body.deviceId) throw new HttpError(403, 'Dispositivo incompatível.');
       if (codeRow.origin !== body.origin) throw new HttpError(403, 'Origem incompatível (CSRF).');

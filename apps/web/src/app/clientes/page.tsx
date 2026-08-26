@@ -2,7 +2,7 @@
 import { useResource } from '@/lib/client/api';
 
 export default function ClientesPage() {
-  const { data, error, loading } = useResource<{ clients: { id: string; name: string; industry?: string }[] }>('/api/resources/clients');
+  const { data, error, loading } = useResource<{ clients: { id: string; name: string; industry?: string }[] }>('/api/clients');
   return (
     <div className="mx-auto max-w-4xl px-4 py-10">
       <h1 className="font-serif text-3xl font-bold text-brand-deep dark:text-brand">Clientes</h1>

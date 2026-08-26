@@ -34,16 +34,6 @@ export const registerSchema = loginSchema.extend({
 });
 export type RegisterInput = z.infer<typeof registerSchema>;
 
-export const extensionCodeExchangeSchema = z.object({
-  code: z.string().min(16).max(128),
-  codeVerifier: z.string().min(16).max(256),
-  deviceId: z.string().min(4).max(128),
-  origin: z.string().url(),
-  state: z.string().min(8).max(256).optional(),
-  nonce: z.string().min(8).max(256).optional(),
-});
-export type ExtensionCodeExchangeInput = z.infer<typeof extensionCodeExchangeSchema>;
-
 // ----- Organization / Client -----
 export const organizationCreateSchema = z.object({
   name: z.string().min(2).max(160),
@@ -199,15 +189,28 @@ export const approvalDecisionSchema = z.object({
 });
 export type ApprovalDecisionInput = z.infer<typeof approvalDecisionSchema>;
 
-// ----- Extension session -----
-export const extensionSessionCreateSchema = z.object({
-  deviceId: z.string().min(4).max(128),
-  userAgent: z.string().max(300),
-});
+// ----- Extension auth: start -----
+const sha256HexRegex = /^[a-f0-9]{64}$/;
 
-// ----- Legal acceptance -----
-export const legalAcceptanceSchema = z.object({
-  termsVersion: z.string().max(40),
-  privacyVersion: z.string().max(40),
-  accepted: z.literal(true),
+export const extensionAuthStartSchema = z.object({
+  codeChallenge: z.string().min(16).max(128),
+  deviceId: z.string().min(4).max(128),
+  origin: z.string().url(),
+  stateHash: z.string().regex(sha256HexRegex, 'stateHash deve ser SHA-256 hexadecimal (64 chars)'),
+  nonceHash: z.string().regex(sha256HexRegex, 'nonceHash deve ser SHA-256 hexadecimal (64 chars)'),
+  browser: z.string().min(1).max(80),
+  extensionVersion: z.string().min(1).max(40),
+  extensionName: z.string().min(1).max(160).default('Mants Brand Orchestrator'),
 });
+export type ExtensionAuthStartInput = z.infer<typeof extensionAuthStartSchema>;
+
+// ----- Extension auth: exchange -----
+export const extensionCodeExchangeSchema = z.object({
+  code: z.string().min(16).max(128),
+  codeVerifier: z.string().min(16).max(256),
+  deviceId: z.string().min(4).max(128),
+  origin: z.string().url(),
+  state: z.string().min(8).max(256),
+  nonce: z.string().min(8).max(256),
+});
+export type ExtensionCodeExchangeInput = z.infer<typeof extensionCodeExchangeSchema>;
