@@ -1,6 +1,8 @@
 'use client';
 
-import { useEffect } from 'react';
+export const dynamic = 'force-dynamic';
+
+import { Suspense, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 
 /**
@@ -9,6 +11,14 @@ import { useRouter, useSearchParams } from 'next/navigation';
  * Remove o código da URL (history.replaceState) após o processamento.
  */
 export default function ExtensionAuthorizeSuccessPage() {
+  return (
+    <Suspense fallback={<main className="mx-auto max-w-lg p-6"><p>Carregando…</p></main>}>
+      <ExtensionAuthorizeSuccessInner />
+    </Suspense>
+  );
+}
+
+function ExtensionAuthorizeSuccessInner() {
   const router = useRouter();
   const params = useSearchParams();
 

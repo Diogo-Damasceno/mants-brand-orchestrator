@@ -5,12 +5,15 @@ import {
   extGet,
   extPost,
   extPatch,
+  getPublicConfig,
+  getSessionSafe,
 } from '../modules/extension-client';
 import browser from 'webextension-polyfill';
 
 interface Option {
   id: string;
   name: string;
+  clientId?: string;
 }
 interface AssetOption extends Option {
   mimeType: string;
@@ -23,6 +26,7 @@ interface PromptResult {
 
 export default defineSidepanel(() => {
   const [status, setStatus] = useState('Carregando…');
+  const [error, setError] = useState('');
   const [session, setSession] = useState<Session | null>(null);
   const [assistedEnabled, setAssistedEnabled] = useState(false);
 
@@ -56,51 +60,70 @@ export default defineSidepanel(() => {
           return;
         }
         setSession(s);
-        // Verifica feature flag remota e versão mínima.
-        const cfg = await extGet<{ featureChatgptAssistedInsertion: boolean; extensionMinVersion: string }>(
-          '/api/extension/config',
-          s.token,
-        );
+        // Valida a sessão no backend (revogação/expiração/organização).
+        try {
+          await getSessionSafe();
+        } catch {
+          setStatus('Sessão inválida ou expirada. Faça login novamente.');
+          return;
+        }
+        // Configuração pública (sem token); verifica feature flag remota.
+        const cfg = await getPublicConfig<{ featureChatgptAssistedInsertion: boolean; extensionMinVersion: string }>();
         setAssistedEnabled(cfg.featureChatgptAssistedInsertion);
         await loadClients(s.token);
         await loadBrandKits(s.token);
         setStatus('Pronto.');
       } catch (e) {
-        setStatus(e instanceof Error ? e.message : 'Falha ao carregar sessão.');
+        setError(describeError(e));
+        setStatus('Falha ao carregar.');
       }
     })();
+
   }, []);
+
+  function describeError(e: unknown): string {
+    if (e instanceof Error) {
+      if (/401|sess[aã]o/i.test(e.message)) return 'Sessão expirada. Faça login novamente.';
+      if (/failed to fetch|network|indispon/i.test(e.message)) return 'API indisponível. Verifique a conexão.';
+      if (/403|negad/i.test(e.message)) return 'Acesso negado.';
+      return e.message;
+    }
+    return 'Erro desconhecido.';
+  }
 
   async function loadClients(t: string) {
     try {
       const d = await extGet<{ clients: Option[] }>('/api/clients', t);
       setClients(d.clients ?? []);
-    } catch {
-      /* silencioso */
+      if ((d.clients ?? []).length === 0) setStatus('Nenhum cliente disponível.');
+    } catch (e) {
+      setError(describeError(e));
     }
   }
   async function loadBrandKits(t: string) {
     try {
       const d = await extGet<{ brandKits: Option[] }>('/api/brand-kits', t);
-      setBrandKits(d.brandKits ?? []);
-    } catch {
-      /* silencioso */
+      const all = d.brandKits ?? [];
+      // Filtra pelo cliente selecionado (isolamento por cliente).
+      setBrandKits(client ? all.filter((b) => b.clientId === client) : all);
+    } catch (e) {
+      setError(describeError(e));
     }
   }
   async function loadCampaigns(t: string, bk: string) {
     try {
       const d = await extGet<{ campaigns: Option[] }>(`/api/campaigns?brandKitId=${bk}`, t);
       setCampaigns(d.campaigns ?? []);
-    } catch {
-      /* silencioso */
+    } catch (e) {
+      setError(describeError(e));
     }
   }
   async function loadAssets(t: string, bk: string) {
     try {
       const d = await extGet<{ assets: AssetOption[] }>(`/api/assets?brandKitId=${bk}`, t);
       setAssets(d.assets ?? []);
-    } catch {
-      /* silencioso */
+    } catch (e) {
+      setError(describeError(e));
     }
   }
 
@@ -186,17 +209,34 @@ export default defineSidepanel(() => {
       });
       // Download autenticado via fetch + Blob (Bearer enviado, sem token na URL).
       const blob = await downloadPackageBlob(d.id, session.token);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `mants-pacote-${d.id.slice(0, 8)}.zip`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      const blobUrl = URL.createObjectURL(blob);
+      const filename = `mants-pacote-${d.id.slice(0, 8)}.zip`;
+      // Tenta a API de downloads (melhor UX); fallback para <a download>.
+      let usedDownloads = false;
+      if (browser?.downloads?.download) {
+        try {
+          await browser.downloads.download({ url: blobUrl, filename, saveAs: true });
+          usedDownloads = true;
+        } catch {
+          usedDownloads = false;
+        }
+      }
+      if (!usedDownloads) {
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        // Aguarda o início do download antes de revogar a URL.
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 10_000);
+      } else {
+        // Com downloads.download, a URL é consumida internamente; revoga após um tempo.
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 10_000);
+      }
       setStatus('Pacote gerado e baixado.');
     } catch (e) {
-      setStatus(e instanceof Error ? e.message : 'Falha ao gerar pacote.');
+      setStatus(describeError(e));
     }
   }
 
@@ -226,7 +266,19 @@ export default defineSidepanel(() => {
       <p style={{ color: '#666' }}>Org: {session?.organizationId || '—'}</p>
 
       <label>Cliente
-        <select value={client} onChange={(e) => setClient(e.target.value)} style={{ width: '100%' }}>
+        <select value={client} onChange={(e) => {
+          const v = e.target.value;
+          setClient(v);
+          // Limpa cascata ao trocar de cliente (isolamento por cliente).
+          setBrandKit('');
+          setCampaign('');
+          setAssets([]);
+          setSelectedAssets([]);
+          setPrompt('');
+          setEdited('');
+          setPromptId('');
+          if (session) void loadBrandKits(session.token);
+        }} style={{ width: '100%' }}>
           <option value="">— selecione —</option>
           {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
@@ -303,6 +355,7 @@ export default defineSidepanel(() => {
         <button onClick={onImportResult}>Importar resultado</button>
       </div>
       <p style={{ color: '#444', marginTop: 8 }}>{status}</p>
+      {error && <p style={{ color: '#b00', marginTop: 8 }}>{error}</p>}
       <p style={{ fontSize: 10, color: '#888' }}>
         A inserção assistida é experimental e controlada por flag remota. Sempre funciona copiar, baixar e abrir.
       </p>

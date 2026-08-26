@@ -64,8 +64,8 @@ describe('session token hash', () => {
 });
 
 describe('pkce', () => {
-  it('createPkceChallenge computes BASE64URL(SHA256(verifier))', () => {
-    const { createHash } = require('node:crypto');
+  it('createPkceChallenge computes BASE64URL(SHA256(verifier))', async () => {
+    const { createHash } = await import('node:crypto');
     const verifier = 'a'.repeat(43);
     const expected = createHash('sha256').update(Buffer.from(verifier, 'utf8')).digest('base64url');
     expect(createPkceChallenge(verifier)).toBe(expected);

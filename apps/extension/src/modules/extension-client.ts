@@ -3,7 +3,7 @@
  * Centraliza tratamento de 401 (sessão expirada) para limpar e solicitar login.
  */
 import type { ExtensionMessage, AuthStatus } from './messages';
-import { getSession, clearSession } from './storage';
+import { clearSession } from './storage';
 import { getApiBase } from './api';
 
 function send<T = unknown>(msg: ExtensionMessage): Promise<T> {

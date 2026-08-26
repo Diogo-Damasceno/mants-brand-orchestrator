@@ -10,10 +10,16 @@
     "typecheck": "turbo typecheck",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "pnpm --filter @mants/web test:e2e",
+    "test:e2e": "playwright test",
     "extension:dev": "pnpm --filter @mants/extension dev",
     "extension:build": "pnpm --filter @mants/extension build",
     "extension:zip": "pnpm --filter @mants/extension zip",
+    "extension:build:chrome": "pnpm --filter @mants/extension build:chrome",
+    "extension:build:edge": "pnpm --filter @mants/extension build:edge",
+    "extension:build:firefox": "pnpm --filter @mants/extension build:firefox",
+    "extension:zip:chrome": "pnpm --filter @mants/extension zip:chrome",
+    "extension:zip:edge": "pnpm --filter @mants/extension zip:edge",
+    "extension:zip:firefox": "pnpm --filter @mants/extension zip:firefox",
     "db:generate": "pnpm --filter @mants/database generate",
     "db:migrate": "pnpm --filter @mants/database migrate",
     "db:seed": "pnpm --filter @mants/database seed",
@@ -29,7 +35,8 @@
     "turbo": "^2.2.3",
     "typescript": "^5.6.3",
     "vitest": "^2.1.4",
-    "minio": "^7.1.3"
+    "minio": "^7.1.3",
+    "@playwright/test": "^1.48.0"
   },
   "pnpm": {
     "overrides": {

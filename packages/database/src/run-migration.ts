@@ -1,4 +1,5 @@
 import { readdirSync, readFileSync } from 'node:fs';
+/* eslint-disable no-console */
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';

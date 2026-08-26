@@ -1,6 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+export const dynamic = 'force-dynamic';
+
+import { Suspense, useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { apiGet, apiPost } from '@/lib/client/api';
 
@@ -14,6 +16,14 @@ interface CodeMeta {
 }
 
 export default function ExtensionAuthorizePage() {
+  return (
+    <Suspense fallback={<main className="mx-auto max-w-lg p-6"><p>Carregando…</p></main>}>
+      <ExtensionAuthorizeInner />
+    </Suspense>
+  );
+}
+
+function ExtensionAuthorizeInner() {
   const router = useRouter();
   const params = useSearchParams();
   const code = params.get('code') ?? '';

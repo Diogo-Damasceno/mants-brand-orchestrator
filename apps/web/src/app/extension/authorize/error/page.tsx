@@ -1,6 +1,8 @@
 'use client';
 
-import { useEffect } from 'react';
+export const dynamic = 'force-dynamic';
+
+import { Suspense, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 
 /**
@@ -8,6 +10,14 @@ import { useRouter, useSearchParams } from 'next/navigation';
  * Mostra mensagem genérica (sem expor código/token). Remove código da URL.
  */
 export default function ExtensionAuthorizeErrorPage() {
+  return (
+    <Suspense fallback={<main className="mx-auto max-w-lg p-6"><p>Carregando…</p></main>}>
+      <ExtensionAuthorizeErrorInner />
+    </Suspense>
+  );
+}
+
+function ExtensionAuthorizeErrorInner() {
   const router = useRouter();
   const params = useSearchParams();
 

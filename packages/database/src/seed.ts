@@ -1,3 +1,4 @@
+/* eslint-disable no-console */
 import { randomUUID } from 'node:crypto';
 import { hashPassword } from '@mants/auth';
 import { getDb } from './client.js';

@@ -50,7 +50,7 @@ export default defineConfig({
       return {
         ...base,
         manifest_version: 3,
-        permissions: ['storage', 'tabs', 'activeTab'],
+        permissions: ['storage', 'tabs', 'activeTab', 'alarms', 'downloads'],
         browser_specific_settings: {
           gecko: { id: GECKO_ID },
         },
@@ -66,7 +66,7 @@ export default defineConfig({
     return {
       ...base,
       manifest_version: 3,
-      permissions: ['storage', 'sidePanel', 'activeTab', 'tabs'],
+      permissions: ['storage', 'sidePanel', 'activeTab', 'tabs', 'alarms', 'downloads'],
       // Edge herda do Chromium; metadados opcionais de reconhecimento.
       ...(isEdge ? { browser_specific_settings: { edge: { /* edge specificity */ } } } : {}),
     } as const;

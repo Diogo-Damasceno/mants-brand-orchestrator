@@ -1,9 +1,9 @@
 import { NextRequest } from 'next/server';
-import { timingSafeEqual } from 'node:crypto';
 import { getDb, schema } from '@mants/database';
 import { eq, and, isNull } from 'drizzle-orm';
 import { authenticate, json, errorResponse, HttpError } from '@/lib/server/http';
 import { sha256Hex } from '@mants/auth';
+import { constantTimeHashEqual } from '@/lib/server/crypto';
 
 /** Mascara um código para logs (nunca expõe o código completo). */
 function maskCode(code: string): string {
@@ -13,11 +13,7 @@ function maskCode(code: string): string {
 
 function hashMatches(storedHash: string | null | undefined, plainValue: string | undefined): boolean {
   if (!storedHash || !plainValue) return false;
-  const computed = sha256Hex(plainValue);
-  const a = Buffer.from(storedHash);
-  const b = Buffer.from(computed);
-  if (a.length !== b.length) return false;
-  return timingSafeEqual(a, b);
+  return constantTimeHashEqual(storedHash, sha256Hex(plainValue));
 }
 
 /**

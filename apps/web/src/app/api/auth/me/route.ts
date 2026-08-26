@@ -3,6 +3,8 @@ import { getDb, schema } from '@mants/database';
 import { eq } from 'drizzle-orm';
 import { authenticate, json, errorResponse } from '@/lib/server/http';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET(req: NextRequest) {
   try {
     const ctx = await authenticate(req);

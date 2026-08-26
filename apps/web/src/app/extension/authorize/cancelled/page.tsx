@@ -1,6 +1,8 @@
 'use client';
 
-import { useEffect } from 'react';
+export const dynamic = 'force-dynamic';
+
+import { Suspense, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 
 /**
@@ -8,6 +10,14 @@ import { useRouter, useSearchParams } from 'next/navigation';
  * Remove o código da URL após o processamento.
  */
 export default function ExtensionAuthorizeCancelledPage() {
+  return (
+    <Suspense fallback={<main className="mx-auto max-w-lg p-6"><p>Carregando…</p></main>}>
+      <ExtensionAuthorizeCancelledInner />
+    </Suspense>
+  );
+}
+
+function ExtensionAuthorizeCancelledInner() {
   const router = useRouter();
   const params = useSearchParams();
 

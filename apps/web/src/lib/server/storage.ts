@@ -1,5 +1,7 @@
+/* eslint-disable no-console */
 import { getServerConfig } from '@mants/config';
 import { createHash } from 'node:crypto';
+import { resolve, relative, dirname, isAbsolute } from 'node:path';
 import {
   type S3Config,
   presignGet,
@@ -62,13 +64,26 @@ class S3StorageProvider implements StorageProvider {
 }
 
 /** LocalStorageProvider: APENAS desenvolvimento/testes. Nunca em produção. */
-const LOCAL_ROOT = process.env.STORAGE_LOCAL_ROOT ?? '/tmp/mants-storage';
+const LOCAL_ROOT_RAW = process.env.STORAGE_LOCAL_ROOT ?? '/tmp/mants-storage';
+const LOCAL_ROOT = resolve(LOCAL_ROOT_RAW);
+
+/** Protege contra path traversal, caminhos absolutos, bytes nulos e .. */
+function safeLocalPath(key: string): string {
+  if (key.includes('\0')) throw new Error('Chave inválida (bytes nulos).');
+  // Normaliza e garante que permanece dentro de LOCAL_ROOT.
+  const resolved = resolve(LOCAL_ROOT, key);
+  const rel = relative(LOCAL_ROOT, resolved);
+  if (rel.startsWith('..') || isAbsolute(rel)) {
+    throw new Error('Caminho de armazenamento fora da raiz permitida.');
+  }
+  return resolved;
+}
 
 class LocalStorageProvider implements StorageProvider {
   async put(obj: StorageObject): Promise<{ key: string; size: number }> {
     const fs = await import('node:fs/promises');
-    const path = `${LOCAL_ROOT}/${obj.key}`;
-    await fs.mkdir(path.substring(0, path.lastIndexOf('/')), { recursive: true });
+    const path = safeLocalPath(obj.key);
+    await fs.mkdir(dirname(path), { recursive: true });
     await fs.writeFile(path, obj.buffer);
     return { key: obj.key, size: obj.buffer.byteLength };
   }
@@ -77,11 +92,11 @@ class LocalStorageProvider implements StorageProvider {
   }
   async get(key: string): Promise<Buffer> {
     const fs = await import('node:fs/promises');
-    return fs.readFile(`${LOCAL_ROOT}/${key}`);
+    return fs.readFile(safeLocalPath(key));
   }
   async delete(key: string): Promise<void> {
     const fs = await import('node:fs/promises');
-    await fs.rm(`${LOCAL_ROOT}/${key}`, { force: true });
+    await fs.rm(safeLocalPath(key), { force: true });
   }
 }
 
@@ -173,6 +188,7 @@ export function validateUpload(mime: string, size: number): void {
  * Isola dados entre organizações (prefixo org/) e evita path traversal.
  */
 export function safeObjectKey(organizationId: string, originalName: string, suffix: string): string {
+  if (originalName.includes('\0')) throw new Error('Nome inválido (bytes nulos).');
   const sane = originalName
     .replace(/[^a-zA-Z0-9._-]/g, '_')
     .replace(/\.{2,}/g, '_')

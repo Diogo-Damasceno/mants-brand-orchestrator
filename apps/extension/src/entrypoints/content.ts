@@ -1,3 +1,4 @@
+/* eslint-disable no-console */
 import { ChatSurfaceAdapter } from '../modules/chat-surface';
 
 // Content script: responsabilidade mínima no chatgpt.com.
