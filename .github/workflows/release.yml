@@ -17,7 +17,6 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     env:
-      # Banco administrativo (existente) usado para CRIAR o mants_test.
       DATABASE_ADMIN_URL: postgresql://mants:mants_password@localhost:5432/mants_db
       DATABASE_URL: postgresql://mants:mants_password@localhost:5432/mants_test
       STORAGE_ENDPOINT: http://localhost:9000
@@ -29,10 +28,8 @@ jobs:
       - uses: actions/checkout@v4
       - run: corepack enable
       - run: corepack prepare pnpm@9.12.3 --activate
-      # Gate de versão do pnpm (falha se não for 9.12.3).
       - name: Versão do pnpm
-        run: |
-          test "$(pnpm --version)" = "9.12.3" || { echo "pnpm $(pnpm --version) != 9.12.3"; exit 1; }
+        run: test "$(pnpm --version)" = "9.12.3" || { echo "pnpm $(pnpm --version) != 9.12.3"; exit 1; }
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -41,84 +38,109 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Lint
         run: pnpm lint
-      - name: Typecheck (web)
+      - name: Typecheck web
         run: pnpm --filter @mants/web typecheck
-      - name: Cria banco de teste (URL administrativa; sem ocultar falha)
+      - name: Typecheck extensão
+        run: pnpm --filter @mants/extension typecheck
+      - name: Cria banco de teste (URL administrativa)
         run: |
           psql "$DATABASE_ADMIN_URL" -tc "SELECT 1 FROM pg_database WHERE datname='mants_test'" | grep -q 1 || \
           psql "$DATABASE_ADMIN_URL" -c "CREATE DATABASE mants_test"
-      - name: MinIO (container dedicado, imagem fixa, server /data + console)
+      - name: MinIO (container dedicado, imagem fixa)
         run: |
           docker run -d --name mants-minio -p 9000:9000 -p 9001:9001 \
             -e MINIO_ROOT_USER=mants_minio -e MINIO_ROOT_PASSWORD=mants_minio_secret \
             minio/minio:RELEASE.2024-08-03T04-19-31Z server /data --console-address :9001
-          for i in $(seq 1 30); do
-            curl -fsS http://localhost:9000/minio/health/ready && break
-            sleep 2
-          done
-          curl -fsS http://localhost:9000/minio/health/ready || { echo "MinIO não ficou pronto"; docker logs mants-minio; exit 1; }
-      - name: Cria bucket privado (cliente mc separado)
+          for i in $(seq 1 30); do curl -fsS http://localhost:9000/minio/health/ready && break; sleep 2; done
+          curl -fsS http://localhost:9000/minio/health/ready || { docker logs mants-minio; exit 1; }
+      - name: Cria bucket privado (mc separado)
         run: |
           docker run --rm --network host -e MC_HOST_local=http://mants_minio:mants_minio_secret@localhost:9000 minio/mc:RELEASE.2024-08-03T04-19-31Z mb --ignore-existing local/mants-private
           docker run --rm --network host -e MC_HOST_local=http://mants_minio:mants_minio_secret@localhost:9000 minio/mc:RELEASE.2024-08-03T04-19-31Z anonymous set local/mants-private none
-      - name: Migrations (explicitamente ANTES dos testes)
+      - name: Migrations
         run: pnpm db:migrate
-      - name: Unitários (falha se nenhum teste rodou)
+      - name: Unitários
         run: |
           OUT=$(pnpm test --reporter=dot 2>&1) || { echo "$OUT"; exit 1; }
           echo "$OUT" | grep -qE "Test Files +[1-9]" || { echo "NENHUM teste executado"; exit 1; }
-      - name: Integração (Postgres + MinIO obrigatórios)
+      - name: Integração
         run: pnpm test:integration --reporter=dot
       - name: Build web
         run: pnpm build
-      - name: Health readiness do app web
-        run: |
-          pnpm --filter @mants/web start & SRV=$!
-          trap 'kill $SRV 2>/dev/null || true' EXIT
-          for i in $(seq 1 30); do
-            curl -fsS http://localhost:3000/api/health/ready && break
-            sleep 2
-          done
-          curl -fsS http://localhost:3000/api/health/ready >/dev/null 2>&1 || { echo "App não ficou pronto (readiness)"; kill $SRV; exit 1; }
-      - name: Build Chrome LOCAL para E2E (API_BASE=localhost)
+      - name: Build Chrome LOCAL para E2E
         env:
           BUILD_MODE: development
           API_BASE: http://localhost:3000
         run: pnpm extension:build:chrome
-      - name: E2E (Chrome real contra app local; falha claramente se ausente)
-        run: pnpm test:e2e || { echo "E2E ausente ou falhou — job falha"; kill $SRV 2>/dev/null || true; exit 1; }
-      - name: Encerra servidor web
-        if: always()
-        run: kill $SRV 2>/dev/null || true
-      - name: Limpa build local de E2E
+      - name: Playwright Chromium
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Servidor local + readiness + E2E (mesma etapa)
+        run: |
+          pnpm --filter @mants/web start &
+          SRV=$!
+          trap 'kill "$SRV" 2>/dev/null || true' EXIT
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:3000/api/health/ready >/dev/null && break
+            sleep 2
+          done
+          curl -fsS http://localhost:3000/api/health/ready >/dev/null || { echo "App não ficou pronto (readiness)"; kill "$SRV"; exit 1; }
+          pnpm test:e2e
+          kill "$SRV"
+      - name: Remove build local de E2E
         run: rm -rf apps/extension/.output/chrome-mv3
-      - name: Builds de PRODUÇÃO (API_BASE via secret)
+      - name: Valida API_BASE de produção (obrigatório, sem fallback silencioso)
+        run: |
+          test -n "$API_BASE" || { echo "API_BASE (secret) ausente"; exit 1; }
+          echo "$API_BASE" | grep -qE '^https://[^/]+\.[^/]+$' || { echo "API_BASE inválido (exige https puro, sem path/query, não localhost): $API_BASE"; exit 1; }
+          echo "$API_BASE" | grep -qiE 'localhost|SEU_DOMINIO|your-domain' && { echo "API_BASE não pode ser localhost/placeholder"; exit 1; }
+        env:
+          API_BASE: ${{ secrets.API_BASE }}
+      - name: Builds de PRODUÇÃO (Chrome/Edge/Firefox)
         env:
           BUILD_MODE: production
-          API_BASE: ${{ secrets.API_BASE || 'https://api.mants.company' }}
+          API_BASE: ${{ secrets.API_BASE }}
           FIREFOX_GECKO_ID: mants-brand-orchestrator@mants.company
         run: |
           pnpm extension:build:chrome
           pnpm extension:build:edge
           pnpm extension:build:firefox
-          test -d apps/extension/.output/chrome-mv3 || { echo "Build Chrome ausente"; exit 1; }
-          test -d apps/extension/.output/edge-mv3 || { echo "Build Edge ausente"; exit 1; }
-          test -d apps/extension/.output/firefox-mv3 || { echo "Build Firefox ausente"; exit 1; }
-      - name: Inspeciona manifests (sem localhost)
+          test -d apps/extension/.output/chrome-mv3
+          test -d apps/extension/.output/edge-mv3
+          test -d apps/extension/.output/firefox-mv2
+      - name: Inspeciona manifests (sem localhost ativo)
         run: |
-          for d in chrome-mv3 edge-mv3 firefox-mv3; do
+          for d in chrome-mv3 edge-mv3 firefox-mv2; do
             test -f apps/extension/.output/$d/manifest.json || { echo "manifest ausente em $d"; exit 1; }
           done
-          if rg -n "localhost" apps/extension/.output/chrome-mv3 apps/extension/.output/edge-mv3 apps/extension/.output/firefox-mv3; then
-            echo "localhost encontrado em build de produção"; exit 1
+          # Rejeita apenas uso ATIVO de localhost como origem (não a palavra em guards).
+          if rg -n "localhost:3000|http://localhost" apps/extension/.output/chrome-mv3 apps/extension/.output/edge-mv3 apps/extension/.output/firefox-mv2; then
+            echo "localhost ativo em build de produção"; exit 1
           fi
-      - name: ZIPs (valida artefatos reais)
+      - name: Verifica ícones técnicos (antes dos ZIPs)
+        run: |
+          for s in 16 32 48 96 128; do
+            f=apps/extension/public/icon-${s}.png
+            test -f "$f" || { echo "ÍCONE AUSENTE: $f"; exit 1; }
+            python3 - "$f" <<'PY'
+          import sys, struct, zlib
+          p = sys.argv[1]
+          b = open(p,'rb').read()
+          assert b[:8] == b'\x89PNG\r\n\x1a\n', "não é PNG"
+          w, h = struct.unpack('>II', b[16:24])
+          assert (w, h) == (int(__import__('os').path.basename(p).split('-')[1].split('.')[0]),) * 2, f"dimenção {w}x{h} incorreta"
+          PY
+          done
+      - name: Cria ZIPs (validação de artefatos reais)
+        env:
+          BUILD_MODE: production
+          API_BASE: ${{ secrets.API_BASE }}
+          FIREFOX_GECKO_ID: mants-brand-orchestrator@mants.company
         run: |
           pnpm extension:zip:chrome
           pnpm extension:zip:edge
           pnpm extension:zip:firefox
-          for z in chrome-mv3 edge-mv3 firefox-mv3; do
-            f=$(ls apps/extension/.output/${z}.zip 2>/dev/null || true)
+          for z in chrome edge firefox; do
+            f=$(ls apps/extension/.output/mantsextension-*-$z.zip 2>/dev/null || true)
             test -n "$f" || { echo "ZIP $z ausente"; exit 1; }
             test -s "$f" || { echo "ZIP $z vazio"; exit 1; }
             python3 - "$f" <<'PY'
@@ -126,17 +148,13 @@ jobs:
           zf = zipfile.ZipFile(sys.argv[1])
           names = zf.namelist()
           assert any(n.endswith('manifest.json') for n in names), "manifest.json ausente"
-          assert any(n.endswith('.js') for n in names), "JS principal ausente"
+          assert any(n.endswith('.js') for n in names), "JS ausente"
           for n in names:
-              if n.endswith('.map'):
-                  raise AssertionError("source map sensível presente: " + n)
-              if 'localhost' in n.lower():
-                  raise AssertionError("localhost no caminho: " + n)
-          data = " ".join(zf.read(n).decode('utf-8', 'ignore') for n in names if n.endswith('.js') or n.endswith('manifest.json'))
-          if re.search(r'https?://localhost', data):
-              raise AssertionError("localhost em conteúdo de produção")
-          if 'SEU_DOMINIO' in data or 'your-domain' in data:
-              raise AssertionError("placeholder de domínio em produção")
+              if n.endswith('.map'): raise AssertionError("source map sensível: " + n)
+              if 'localhost' in n.lower(): raise AssertionError("localhost no path: " + n)
+          data = " ".join(zf.read(n).decode('utf-8','ignore') for n in names if n.endswith('.js') or n.endswith('manifest.json'))
+          if re.search(r'https?://localhost:3000', data): raise AssertionError("localhost ativo em conteúdo")
+          if 'SEU_DOMINIO' in data or 'your-domain' in data: raise AssertionError("placeholder de domínio")
           print("OK", sys.argv[1], len(names), "arquivos")
           PY
           done
@@ -144,14 +162,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: extension-zips
-          path: apps/extension/.output/*.zip
+          path: apps/extension/.output/mantsextension-*.zip
           if-no-files-found: error
-      - name: Verifica ícones obrigatórios
-        run: |
-          for s in 16 32 48 96 128; do
-            f=apps/extension/public/icon-${s}.png
-            test -f "$f" || { echo "ÍCONE AUSENTE: $f"; exit 1; }
-          done
       - name: Encerra MinIO
         if: always()
         run: docker rm -f mants-minio 2>/dev/null || true

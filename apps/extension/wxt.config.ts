@@ -16,7 +16,7 @@ import { defineConfig } from 'wxt';
  */
 
 const API_BASE = process.env.API_BASE ?? process.env.API_BASE_URL ?? 'http://localhost:3000';
-const BUILD_MODE = process.env.BUILD_MODE ?? process.env.NODE_ENV ?? 'development';
+const BUILD_MODE = process.env.BUILD_MODE ?? 'development';
 
 if (BUILD_MODE === 'production' && API_BASE === 'http://localhost:3000') {
   throw new Error(
@@ -56,6 +56,13 @@ export default defineConfig({
         browser_specific_settings: {
           gecko: { id: GECKO_ID },
         },
+        icons: {
+          16: 'icon-16.png',
+          32: 'icon-32.png',
+          48: 'icon-48.png',
+          96: 'icon-96.png',
+          128: 'icon-128.png',
+        },
         sidebar_action: {
           default_path: 'sidepanel.html',
           default_title: 'Mants — Painel lateral',
@@ -68,9 +75,29 @@ export default defineConfig({
     return {
       ...base,
       manifest_version: 3,
+      action: {
+        default_title: 'Mants Brand Orchestrator',
+        default_popup: 'popup/index.html',
+        default_icon: {
+          16: 'icon-16.png',
+          32: 'icon-32.png',
+          48: 'icon-48.png',
+          96: 'icon-96.png',
+          128: 'icon-128.png',
+        },
+      },
+      icons: {
+        16: 'icon-16.png',
+        32: 'icon-32.png',
+        48: 'icon-48.png',
+        96: 'icon-96.png',
+        128: 'icon-128.png',
+      },
+      side_panel: {
+        default_path: 'sidepanel/index.html',
+      },
       permissions: ['storage', 'sidePanel', 'activeTab', 'tabs', 'alarms', 'downloads'],
-      // Edge herda do Chromium; metadados opcionais de reconhecimento.
-      ...(isEdge ? { browser_specific_settings: { edge: { /* edge specificity */ } } } : {}),
+      ...(isEdge ? { browser_specific_settings: { edge: {} } } : {}),
     } as const;
   },
 });

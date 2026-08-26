@@ -16,3 +16,6 @@ test-results/
 playwright-report/
 node_modules/
 *.tsbuildinfo
+
+# WXT generated
+.wxt/

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { getSession, clearSession } from '../modules/storage';
-import { getApiBase, type Session } from '../modules/api';
+import { getSession, clearSession } from '../../modules/storage';
+import { getApiBase, type Session } from '../../modules/api';
 import {
   startAuthFlow,
   cancelFlow,
@@ -8,12 +8,11 @@ import {
   getAuthStatus,
   getPublicConfig,
   validateExtensionSession,
-} from '../modules/extension-client';
-import type { AuthStatus } from '../modules/messages';
+} from '../../modules/extension-client';
+import type { AuthStatus } from '../../modules/messages';
 
 const FALLBACK_MIN_VERSION = '0.1.0';
 
-/** Compara versões semânticas simples (x.y.z). Retorna <0, 0, >0. */
 function compareVersions(a: string, b: string): number {
   const pa = a.split('.').map((n) => parseInt(n, 10) || 0);
   const pb = b.split('.').map((n) => parseInt(n, 10) || 0);
@@ -25,7 +24,7 @@ function compareVersions(a: string, b: string): number {
   return 0;
 }
 
-export default definePopup(() => {
+export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [status, setStatus] = useState<AuthStatus>({ phase: 'idle', code: null, error: null });
   const [error, setError] = useState('');
@@ -35,8 +34,6 @@ export default definePopup(() => {
   const [busy, setBusy] = useState(false);
   const [expired, setExpired] = useState(false);
 
-  // Lê versão real do manifesto e verifica a versão mínima aceita pela API
-  // (rota pública, sem token).
   useEffect(() => {
     const manifest = browser.runtime.getManifest();
     const v = manifest.version ?? '0.1.0';
@@ -47,10 +44,9 @@ export default definePopup(() => {
         setMinVersion(min);
         setVersionOk(compareVersions(v, min) >= 0);
       })
-      .catch(() => setVersionOk(true)); // não bloqueia offline
+      .catch(() => setVersionOk(true));
   }, []);
 
-  // Sessão persistida + estado de autenticação do background + validação no backend.
   useEffect(() => {
     void refresh();
   }, []);
@@ -59,7 +55,6 @@ export default definePopup(() => {
     const s = await getSession<Session>();
     setSession(s);
     if (s?.token) {
-      // 1) Expiração local (rápida, sem rede).
       const locallyExpired = typeof s.expiresAt === 'number' && Date.now() > s.expiresAt;
       if (locallyExpired) {
         await clearSession();
@@ -70,26 +65,21 @@ export default definePopup(() => {
         applyStatus(st);
         return;
       }
-      // 2) Validação REAL no backend (assinatura, expiração, revogação, org, membership).
       try {
         const v = await validateExtensionSession(s.token);
         if (!v.valid) {
           if (v.networkError) {
-            // Falha de rede temporária: NÃO apaga a sessão. Mantém o usuário logado
-            // off-line; o popup tentará revalidar na próxima abertura.
             setError('API indisponível. Sessão mantida localmente.');
             const st = await getAuthStatus();
             applyStatus(st);
             return;
           }
-          // Sessão inválida/expirada/revogada: limpa e oferece novo login.
           await clearSession();
           setSession(null);
           setExpired(true);
           broadcastExpired();
           return;
         }
-        // 3) Atualiza estado de validade com dados do servidor.
         setSession((prev) => (prev ? { ...prev, expiresAt: v.expiresAt ?? prev.expiresAt } : prev));
       } catch {
         setError('API indisponível. Sessão mantida localmente.');
@@ -129,7 +119,6 @@ export default definePopup(() => {
     setBusy(false);
   }
 
-  // Recebe mudanças de estado do background (broadcast).
   useEffect(() => {
     const listener = (msg: unknown) => {
       const m = msg as { type?: string; status?: AuthStatus; session?: unknown };
@@ -193,16 +182,17 @@ export default definePopup(() => {
 
   async function openSidePanelCompat() {
     try {
-      // Chromium: abre o side panel da janela atual.
       const w = await browser.windows.getCurrent();
-      if (browser.sidePanel?.open && w.id != null) {
-        await browser.sidePanel.open({ windowId: w.id });
+      const sidePanel = (browser as unknown as {
+        sidePanel?: { open: (o: { windowId: number }) => Promise<void> };
+      }).sidePanel;
+      if (sidePanel?.open && w.id != null) {
+        await sidePanel.open({ windowId: w.id });
         return;
       }
     } catch {
       /* Firefox não tem browser.sidePanel */
     }
-    // Fallback Firefox: abre o painel lateral como página.
     browser.tabs.create({ url: browser.runtime.getURL('sidepanel.html') });
   }
 
@@ -274,4 +264,4 @@ export default definePopup(() => {
       </p>
     </div>
   );
-});
+}

@@ -2,9 +2,10 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "jsx": "react-jsx",
-    "types": ["wxt/browser"],
+    "types": ["wxt/browser", "node"],
     "noEmit": true,
     "moduleResolution": "bundler"
   },
-  "include": ["src", "wxt.config.ts"]
+  "include": ["src", "wxt.config.ts", ".wxt/types"],
+  "exclude": ["node_modules", ".output"]
 }

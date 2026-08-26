@@ -291,8 +291,8 @@ export default defineBackground(() => {
   });
 
   // Mensagens: listener retorna Promise (sem sendResponse/sendResponse misto).
-  browser.runtime.onMessage.addListener((msg: ExtensionMessage) => {
-    return handleMessage(msg);
+  browser.runtime.onMessage.addListener((msg: unknown) => {
+    return handleMessage(msg as ExtensionMessage);
   });
 
   // Alarme de polling durável (sobrevive à suspensão do SW MV3).

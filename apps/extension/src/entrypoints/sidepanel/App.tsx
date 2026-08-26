@@ -1,15 +1,15 @@
 import { useState, useEffect } from 'react';
-import { getSession, clearSession } from '../modules/storage';
-import { getApiBase, registerPromptUsage, downloadPackageBlob, type Session } from '../modules/api';
+import { getSession, clearSession } from '../../modules/storage';
+import { getApiBase, registerPromptUsage, downloadPackageBlob, type Session } from '../../modules/api';
 import {
   extGet,
   extPost,
   extPatch,
   getPublicConfig,
   validateExtensionSession,
-} from '../modules/extension-client';
+} from '../../modules/extension-client';
 import browser from 'webextension-polyfill';
-import { filterBrandKitsByClient } from '../modules/sidepanel-filter';
+import { filterBrandKitsByClient } from '../../modules/sidepanel-filter';
 
 interface Option {
   id: string;
@@ -25,7 +25,7 @@ interface PromptResult {
   prompt: { originalText: string };
 }
 
-export default defineSidepanel(() => {
+export default function App() {
   const [status, setStatus] = useState('Carregando…');
   const [error, setError] = useState('');
   const [session, setSession] = useState<Session | null>(null);
@@ -61,16 +61,12 @@ export default defineSidepanel(() => {
           return;
         }
         setSession(s);
-        // Valida a sessão no backend (revogação/expiração/organização/membership).
         try {
           const v = await validateExtensionSession(s.token);
           if (!v.valid) {
             if (v.networkError) {
-              // Indisponibilidade: mantém a sessão local; apenas informa.
               setStatus('API indisponível. Sessão mantida localmente.');
             } else {
-              // Sessão definitivamente inválida (revogada/expirada/mudança de org):
-              // limpa o storage, zera o estado e impede chamadas subsequentes.
               await clearSession();
               setSession(null);
               setStatus('Sessão inválida ou expirada. Faça login novamente.');
@@ -80,7 +76,6 @@ export default defineSidepanel(() => {
         } catch {
           setStatus('API indisponível. Sessão mantida localmente.');
         }
-        // Configuração pública (sem token); verifica feature flag remota.
         const cfg = await getPublicConfig<{ featureChatgptAssistedInsertion: boolean; extensionMinVersion: string }>();
         setAssistedEnabled(cfg.featureChatgptAssistedInsertion);
         await loadClients(s.token);
@@ -91,7 +86,6 @@ export default defineSidepanel(() => {
         setStatus('Falha ao carregar.');
       }
     })();
-
   }, []);
 
   function describeError(e: unknown): string {
@@ -117,7 +111,6 @@ export default defineSidepanel(() => {
     try {
       const d = await extGet<{ brandKits: Option[] }>('/api/brand-kits', t);
       const all = d.brandKits ?? [];
-      // Filtra pelo cliente (isolamento por cliente). Confirma clientId real na resposta.
       setBrandKits(filterBrandKitsByClient(all, clientId));
     } catch (e) {
       setError(describeError(e));
@@ -180,7 +173,6 @@ export default defineSidepanel(() => {
   async function onSaveEdit() {
     if (!session || !promptId) return setStatus('Gere um prompt primeiro.');
     try {
-      // Contrato real da API: PATCH /api/prompts/:id (validado por schema).
       await extPatch(`/api/prompts/${promptId}`, session.token, { promptId, editedText: edited });
       setStatus('Edição salva.');
     } catch (e) {
@@ -202,8 +194,6 @@ export default defineSidepanel(() => {
       setStatus('Inserção assistida desativada. Use "Copiar prompt".');
       return;
     }
-    // O side panel NÃO está no DOM do ChatGPT: encaminha ao background, que
-    // localiza a aba ativa e manda ao content script (INSERT_TEXT).
     const r = await browser.runtime.sendMessage({ type: 'INSERT_TEXT', text: edited || prompt });
     const res = r as { ok: boolean; reason?: string } | undefined;
     if (res?.ok) setStatus('Inserido no ChatGPT.');
@@ -220,11 +210,9 @@ export default defineSidepanel(() => {
         promptId,
         assetIds: selectedAssets,
       });
-      // Download autenticado via fetch + Blob (Bearer enviado, sem token na URL).
       const blob = await downloadPackageBlob(d.id, session.token);
       const blobUrl = URL.createObjectURL(blob);
       const filename = `mants-pacote-${d.id.slice(0, 8)}.zip`;
-      // Tenta a API de downloads (melhor UX); fallback para <a download>.
       let usedDownloads = false;
       if (browser?.downloads?.download) {
         try {
@@ -241,10 +229,8 @@ export default defineSidepanel(() => {
         document.body.appendChild(a);
         a.click();
         a.remove();
-        // Aguarda o início do download antes de revogar a URL.
         setTimeout(() => URL.revokeObjectURL(blobUrl), 10_000);
       } else {
-        // Com downloads.download, a URL é consumida internamente; revoga após um tempo.
         setTimeout(() => URL.revokeObjectURL(blobUrl), 10_000);
       }
       setStatus('Pacote gerado e baixado.');
@@ -263,13 +249,11 @@ export default defineSidepanel(() => {
       await registerPromptUsage(promptId, session.token);
       setStatus('Uso registrado.');
     } catch (e) {
-      // Não afirma "Uso registrado" quando falha.
       setStatus(e instanceof Error ? e.message : 'Falha ao registrar uso.');
     }
   }
 
   function onImportResult() {
-    // Rota real existente no site (apps/web/src/app/resultados/importar/page.tsx).
     browser.tabs.create({ url: `${getApiBase()}/resultados/importar` });
   }
 
@@ -282,7 +266,6 @@ export default defineSidepanel(() => {
         <select value={client} onChange={(e) => {
           const v = e.target.value;
           setClient(v);
-          // Limpa cascata ao trocar de cliente (isolamento por cliente).
           setBrandKit('');
           setCampaign('');
           setAssets([]);
@@ -348,7 +331,7 @@ export default defineSidepanel(() => {
         {assets.length === 0 && <span style={{ color: '#888' }}>Nenhum ativo para este Brand Kit.</span>}
         {assets.map((a) => (
           <label key={a.id} style={{ display: 'block' }}>
-            <input type="checkbox" checked={selectedAssets.includes(a.id)} onChange={() => toggleAsset(a.id)} /> {a.originalName}
+            <input type="checkbox" data-testid={`asset-${a.id}`} checked={selectedAssets.includes(a.id)} onChange={() => toggleAsset(a.id)} /> {a.originalName}
           </label>
         ))}
       </div>
@@ -374,4 +357,4 @@ export default defineSidepanel(() => {
       </p>
     </div>
   );
-});
+}
