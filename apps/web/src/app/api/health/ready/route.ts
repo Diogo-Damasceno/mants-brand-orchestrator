@@ -21,9 +21,13 @@ export async function GET() {
 
   // 2. Migrations aplicadas
   try {
-    const rows = await getDb().execute(sql`select count(*)::int as n from _mants_migrations`);
-    const n = (rows as unknown as { n: number }[])[0]?.n ?? 0;
-    if (n === 0) problems.push('no_migrations');
+    const res = (await getDb().execute(
+      sql`select count(*)::int as n from _mants_migrations`,
+    )) as unknown as { rows?: Array<Record<string, unknown>> };
+    const first = res?.rows?.[0] ?? {};
+    const raw = Object.values(first)[0];
+    const n = typeof raw === 'string' ? parseInt(raw, 10) : Number(raw ?? 0);
+    if (!Number.isFinite(n) || n === 0) problems.push('no_migrations');
   } catch {
     problems.push('migrations_table_missing');
   }
