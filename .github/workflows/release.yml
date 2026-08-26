@@ -42,10 +42,16 @@ jobs:
         run: pnpm --filter @mants/web typecheck
       - name: Typecheck extensão
         run: pnpm --filter @mants/extension typecheck
-      - name: Cria banco de teste (URL administrativa)
+      - name: Postgres (container dedicado, imagem fixa)
         run: |
-          psql "$DATABASE_ADMIN_URL" -tc "SELECT 1 FROM pg_database WHERE datname='mants_test'" | grep -q 1 || \
-          psql "$DATABASE_ADMIN_URL" -c "CREATE DATABASE mants_test"
+          docker run -d --name mants-postgres -p 5432:5432 \
+            -e POSTGRES_USER=mants -e POSTGRES_PASSWORD=mants_password -e POSTGRES_DB=mants_db \
+            postgres:16-alpine
+          for i in $(seq 1 30); do
+            docker exec mants-postgres pg_isready -U mants -d mants_db >/dev/null 2>&1 && break
+            sleep 2
+          done
+          docker exec mants-postgres pg_isready -U mants -d mants_db >/dev/null 2>&1 || { docker logs mants-postgres; exit 1; }
       - name: MinIO (container dedicado, imagem fixa)
         run: |
           docker run -d --name mants-minio -p 9000:9000 -p 9001:9001 \
@@ -53,6 +59,10 @@ jobs:
             minio/minio:RELEASE.2024-08-03T04-19-31Z server /data --console-address :9001
           for i in $(seq 1 30); do curl -fsS http://localhost:9000/minio/health/ready && break; sleep 2; done
           curl -fsS http://localhost:9000/minio/health/ready || { docker logs mants-minio; exit 1; }
+      - name: Cria banco de teste (URL administrativa; sem ocultar falha)
+        run: |
+          docker exec mants-postgres psql -U mants -d mants_db -tc "SELECT 1 FROM pg_database WHERE datname='mants_test'" | grep -q 1 || \
+          docker exec mants-postgres psql -U mants -d mants_db -c "CREATE DATABASE mants_test"
       - name: Cria bucket privado (mc separado)
         run: |
           docker run --rm --network host -e MC_HOST_local=http://mants_minio:mants_minio_secret@localhost:9000 minio/mc:RELEASE.2024-08-03T04-19-31Z mb --ignore-existing local/mants-private
@@ -164,6 +174,7 @@ jobs:
           name: extension-zips
           path: apps/extension/.output/mantsextension-*.zip
           if-no-files-found: error
-      - name: Encerra MinIO
+      - name: Encerra containers
         if: always()
-        run: docker rm -f mants-minio 2>/dev/null || true
+        run: |
+          docker rm -f mants-minio mants-postgres 2>/dev/null || true
