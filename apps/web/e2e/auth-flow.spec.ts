@@ -206,7 +206,9 @@ test.describe('Fluxo PKCE completo (extensão real Chrome/Chromium)', () => {
       await assetCb.check();
       await expect(assetCb).toBeChecked();
       await sp.getByRole('button', { name: /gerar prompt/i }).click();
-      const promptText = await sp.getByText(/objetivo|público|lançamento/i).first().innerText();
+      const promptArea = sp.getByTestId('prompt-output');
+      await expect(promptArea).toHaveValue(/objetivo|lançamento|público/i, { timeout: 30_000 });
+      const promptText = await promptArea.inputValue();
       expect(promptText.length).toBeGreaterThan(10);
 
       // 8. Edição: salva e confirma sucesso na UI.

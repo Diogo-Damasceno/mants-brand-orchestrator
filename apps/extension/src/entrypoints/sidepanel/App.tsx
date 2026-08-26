@@ -338,7 +338,7 @@ export default function App() {
 
       <button onClick={onGenerate} style={{ marginTop: 8, width: '100%' }}>Gerar prompt</button>
       <label>Pré-visualização / Edição
-        <textarea value={edited} onChange={(e) => setEdited(e.target.value)} rows={8} style={{ width: '100%' }} readOnly={!prompt} />
+        <textarea data-testid="prompt-output" value={edited} onChange={(e) => setEdited(e.target.value)} rows={8} style={{ width: '100%' }} readOnly={!prompt} />
       </label>
       <button onClick={onSaveEdit} style={{ width: '100%' }}>Salvar edição</button>
 
