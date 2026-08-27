@@ -106,13 +106,22 @@ jobs:
       - name: Integração
         run: pnpm test:integration --reporter=basic
       # 11) Build web de PRODUÇÃO — obrigatório (publicação/homologação exigem compilação).
+      #     Secrets validados ANTES do build: não usamos fallback silencioso, para
+      #     que nenhum secret fictício ("change-me") seja compilado em produção.
+      - name: Valida secrets obrigatórios do build web (sem fallback)
+        env:
+          API_BASE: ${{ secrets.API_BASE }}
+          AUTH_SECRET: ${{ secrets.AUTH_SECRET }}
+        run: |
+          test -n "$API_BASE" || { echo "secret API_BASE não definido (build web de produção)"; exit 1; }
+          test -n "$AUTH_SECRET" || { echo "secret AUTH_SECRET não definido (build web de produção)"; exit 1; }
       - name: Build web (produção)
         env:
           NODE_ENV: production
           NEXT_TELEMETRY_DISABLED: '1'
-          APP_URL: ${{ secrets.API_BASE || 'https://api.mants.company' }}
-          API_BASE_URL: ${{ secrets.API_BASE || 'https://api.mants.company' }}
-          AUTH_SECRET: ${{ secrets.AUTH_SECRET || 'change-me-dev-secret-min-32-chars-long-0000000000' }}
+          APP_URL: ${{ secrets.API_BASE }}
+          API_BASE_URL: ${{ secrets.API_BASE }}
+          AUTH_SECRET: ${{ secrets.AUTH_SECRET }}
         run: pnpm --filter @mants/web build
       # 12) Build Chrome LOCAL para E2E (API_BASE=localhost, development)
       - name: Build Chrome LOCAL para E2E
@@ -299,10 +308,15 @@ jobs:
           path: apps/extension/dist-zips/
           if-no-files-found: error
       # Firefox: build obrigatório, manifest validado e ZIP criado/inspecionado acima.
-      # Teste REAL no Firefox permanece como etapa separada e EXPLICITAMENTE PENDENTE.
-      - name: Firefox E2E (pendente — não executado aqui)
+      # Teste REAL no Firefox permanece como etapa separada e EXPLICITAMENTE PENDENTE,
+      # e NÃO é um step verde (para não induzir interpretação incorreta no GitHub Actions).
+      - name: Informação - Firefox E2E não executado
         run: |
-          echo "Firefox E2E: NÃO (etapa separada). Build e manifest Firefox validados; ZIP Firefox gerado e inspecionado."
+          echo "Firefox E2E: NÃO (etapa separada não automatizada nesta rodada)."
+          echo "Build Firefox: SIM"
+          echo "Manifest Firefox: SIM"
+          echo "ZIP Firefox: SIM"
+          echo "Firefox E2E real: NÃO"
       - name: Encerra containers
         if: always()
         run: docker rm -f mants-minio mants-postgres 2>/dev/null || true

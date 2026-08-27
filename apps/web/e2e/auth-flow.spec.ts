@@ -31,14 +31,18 @@ const TEST_RESULTS_DIR = path.resolve('test-results');
 const VIDEO_DIR = path.join(TEST_RESULTS_DIR, 'videos');
 
 interface ApiResult { status: number; json: unknown; headers: http.IncomingHttpHeaders; setCookie: string[]; }
-function apiFetch(method: string, p: string, body?: unknown, cookie?: string): Promise<ApiResult> {
+function apiFetch(method: string, p: string, body?: unknown, cookie?: string, bearer?: string): Promise<ApiResult> {
   return new Promise((resolve, reject) => {
     const url = new URL(p, APP_URL);
     const data = body ? JSON.stringify(body) : undefined;
     const lib = url.protocol === 'https:' ? https : http;
     const req = lib.request(url, {
       method,
-      headers: { 'content-type': 'application/json', ...(cookie ? { cookie } : {}) },
+      headers: {
+        'content-type': 'application/json',
+        ...(cookie ? { cookie } : {}),
+        ...(bearer ? { authorization: `Bearer ${bearer}` } : {}),
+      },
     }, (res) => {
       let raw = '';
       res.on('data', (c) => (raw += c));
@@ -114,6 +118,33 @@ function toPlaywrightCookies(setCookie: string[], url: string): {
     });
   }
   return out;
+}
+
+/**
+ * Lê o Bearer (token de sessão da extensão) diretamente do storage local da
+ * extensão, via o service worker. O token NÃO é exposto em logs, traces nem no
+ * relatório — só é usado para montar a requisição de teste controlada.
+ */
+async function readExtensionToken(context: import('@playwright/test').BrowserContext): Promise<string | null> {
+  const sw = context.serviceWorkers()[0] ?? null;
+  if (!sw) return null;
+  const token = await sw.evaluate(async () => {
+    const r = await (browser.storage.local.get('mants_session') as Promise<{ mants_session?: { token?: string } }>);
+    return r.mants_session?.token ?? null;
+  }).catch(() => null);
+  return token ?? null;
+}
+
+/**
+ * Lê a chave de sessão local da extensão (para comprovar que o storage foi limpo).
+ */
+async function readExtensionSessionRaw(context: import('@playwright/test').BrowserContext): Promise<unknown> {
+  const sw = context.serviceWorkers()[0] ?? null;
+  if (!sw) return null;
+  return sw.evaluate(async () => {
+    const r = await (browser.storage.local.get('mants_session') as Promise<Record<string, unknown>>);
+    return (r as Record<string, unknown>)['mants_session'] ?? null;
+  }).catch(() => null);
 }
 
 async function seedState(): Promise<{ seed: Seed; cookie: string; setCookie: string[] }> {
@@ -222,6 +253,10 @@ interface ZipValidation {
   coreNonEmpty: boolean;
   hasTraversal: boolean;
   unexpectedNames: string[];
+  hasExpectedAsset: boolean;
+  expectedAssetNonEmpty: boolean;
+  expectedAssetIsPng: boolean;
+  expectedAssetMatchesFixture: boolean;
 }
 async function validateCreativeZip(zipPath: string, expectedAssetId: string): Promise<ZipValidation> {
   const buf = fs.readFileSync(zipPath);
@@ -237,6 +272,10 @@ async function validateCreativeZip(zipPath: string, expectedAssetId: string): Pr
     coreNonEmpty: true,
     hasTraversal: false,
     unexpectedNames: [],
+    hasExpectedAsset: false,
+    expectedAssetNonEmpty: false,
+    expectedAssetIsPng: false,
+    expectedAssetMatchesFixture: false,
   };
   // 1) ZIP válido (loadAsync já validou); 2) manifesto / prompt / LEIA-ME.
   result.hasManifest = names.some((n) => n.endsWith('MANIFEST.json'));
@@ -270,10 +309,32 @@ async function validateCreativeZip(zipPath: string, expectedAssetId: string): Pr
       result.unexpectedNames.push(e);
     }
   }
-  // O ativo semeado deve estar no pacote (logo.png enviado como selected-assets/<id>.png).
-  void expectedAssetId;
+  // 6) O ativo semeado DEVE estar no pacote exatamente como selected-assets/<assetId>.<ext>.
+  //    Não basta "qualquer PNG": validamos nome exato, tamanho > 0, magic bytes PNG
+  //    e conteúdo idêntico (SHA-256) à fixture enviada quando o pacote preserva o original.
+  const exactAssetName = `selected-assets/${expectedAssetId}.png`;
+  const assetEntry = zip.files[exactAssetName];
+  result.hasExpectedAsset = Boolean(assetEntry && !assetEntry.dir);
+  if (assetEntry && !assetEntry.dir) {
+    const content = await assetEntry.async('uint8array');
+    result.expectedAssetNonEmpty = content.byteLength > 0;
+    result.expectedAssetIsPng =
+      content.length > 4 &&
+      content[0] === 0x89 && content[1] === 0x50 && content[2] === 0x4e && content[3] === 0x47;
+    // SHA-256 da fixture enviada (logo.png); o pacote deve preservar o arquivo original.
+    try {
+      const fixtureBuf = fs.readFileSync(FIXTURE_PNG);
+      const fixtureHash = crypto.createHash('sha256').update(fixtureBuf).digest('hex');
+      const contentBuf = Buffer.from(content);
+      const assetHash = crypto.createHash('sha256').update(contentBuf).digest('hex');
+      result.expectedAssetMatchesFixture = assetHash === fixtureHash;
+    } catch {
+      result.expectedAssetMatchesFixture = false;
+    }
+  }
   result.valid =
-    result.hasManifest && result.hasPrompt && result.hasReadme && result.assetsNonEmpty && result.coreNonEmpty && !result.hasTraversal;
+    result.hasManifest && result.hasPrompt && result.hasReadme && result.assetsNonEmpty && result.coreNonEmpty && !result.hasTraversal &&
+    result.hasExpectedAsset === true && result.expectedAssetNonEmpty === true && result.expectedAssetIsPng === true && result.expectedAssetMatchesFixture === true;
   return result;
 }
 
@@ -420,11 +481,29 @@ test.describe('Fluxo PKCE completo (extensão real Chrome/Chromium)', () => {
         expect(zipValidation.hasTraversal).toBe(false);
         expect(zipValidation.assetFiles.length).toBeGreaterThan(0);
         expect(zipValidation.unexpectedNames).toEqual([]);
+        // Ativo exato (selected-assets/<assetId>.png) presente e íntegro.
+        expect(zipValidation.hasExpectedAsset, `ativo exato ausente: selected-assets/${seed.assetId}.png`).toBe(true);
+        expect(zipValidation.expectedAssetNonEmpty, 'ativo exato veio vazio').toBe(true);
+        expect(zipValidation.expectedAssetIsPng, 'ativo exato não é PNG (magic bytes)').toBe(true);
+        expect(zipValidation.expectedAssetMatchesFixture, 'conteúdo do ativo difere da fixture enviada (SHA-256)').toBe(true);
       });
 
       await test.step('Uso registrado', async () => {
         await sp.getByRole('button', { name: /registrar uso/i }).click();
         await sp.getByText(/uso registrado/i).first().waitFor({ timeout: 10_000 });
+      });
+
+      // Captura o Bearer da extensão ANTES do logout (sem expô-lo em log/trace).
+      const extToken = await test.step('Bearer da extensão capturado', async () => {
+        const token = await readExtensionToken(context);
+        expect(token, 'token de sessão da extensão não encontrado no storage local').toBeTruthy();
+        return token!;
+      });
+
+      // Antes do logout: o Bearer válido deve receber 200 em /api/extension/session.
+      await test.step('Bearer válido antes do logout (200)', async () => {
+        const r = await apiFetch('GET', '/api/extension/session', undefined, undefined, extToken);
+        expect(r.status).toBe(200);
       });
 
       // Antes do logout, captura a sessão da extensão (cookie web ainda válido).
@@ -442,6 +521,16 @@ test.describe('Fluxo PKCE completo (extensão real Chrome/Chromium)', () => {
         await popup.getByText(/não autenticado|faça login|entrar na mants/i).first().waitFor({ timeout: 10_000 });
       });
 
+      await test.step('Storage da extensão limpo + Bearer antigo rejeitado (401)', async () => {
+        // 1) storage local da extensão foi de fato limpo.
+        const raw = await readExtensionSessionRaw(context);
+        expect(raw, 'storage local da extensão ainda contém a sessão após logout').toBeFalsy();
+        // 2) popup em estado não autenticado (já comprovado no logout).
+        // 3) o MESMO Bearer antigo agora deve receber 401 (sessão revogada).
+        const reuse = await apiFetch('GET', '/api/extension/session', undefined, undefined, extToken);
+        expect(reuse.status).toBe(401);
+      });
+
       await test.step('Sessão revogada', async () => {
         // Com o cookie WEB ainda válido, relista e confirma a sessão revogada.
         const sessions = await apiFetch('GET', '/api/extension/sessions', undefined, cookie);
@@ -451,6 +540,12 @@ test.describe('Fluxo PKCE completo (extensão real Chrome/Chromium)', () => {
         expect(mine).toBeDefined();
         expect(mine!.status).toBe('revoked');
         expect(mine!.revokedAt).toBeTruthy();
+      });
+
+      await test.step('Cookie web ainda válido após logout', async () => {
+        // O cookie de sessão WEB não é afetado pelo logout da extensão.
+        const me = await apiFetch('GET', '/api/auth/me', undefined, cookie);
+        expect(me.status).toBe(200);
       });
     } finally {
       // Trace e vídeo são gerenciados pela config (trace em falha; vídeo em falha).
