@@ -18,9 +18,10 @@ jobs:
     runs-on: ubuntu-latest
     env:
       # Banco administrativo (existente) usado para CRIAR o mants_test.
-      # Senha igual ao docker-compose.yml do repositório (infra de dev/teste).
-      DATABASE_ADMIN_URL: postgresql://mants:***@localhost:5432/mants_db
-      DATABASE_URL: postgresql://mants:***@localhost:5432/mants_test
+      # Senha igual ao container Postgres da etapa anterior (POSTGRES_PASSWORD=mants_password)
+      # e ao docker-compose.yml do repositório (infra de dev/teste).
+      DATABASE_ADMIN_URL: postgresql://mants:mants_password@localhost:5432/mants_db
+      DATABASE_URL: postgresql://mants:mants_password@localhost:5432/mants_test
       STORAGE_ENDPOINT: http://localhost:9000
       STORAGE_ACCESS_KEY_ID: mants_minio
       STORAGE_SECRET_ACCESS_KEY: mants_minio_secret
@@ -68,7 +69,7 @@ jobs:
       # 5b) Cria banco de teste (URL administrativa; sem ocultar falha)
       - name: Cria banco de teste (URL administrativa)
         env:
-          DATABASE_ADMIN_URL: postgresql://mants:***@localhost:5432/mants_db
+          DATABASE_ADMIN_URL: postgresql://mants:mants_password@localhost:5432/mants_db
         run: |
           docker exec mants-postgres psql -U mants -d mants_db -tc "SELECT 1 FROM pg_database WHERE datname='mants_test'" | grep -q 1 || \
           docker exec mants-postgres psql -U mants -d mants_db -c "CREATE DATABASE mants_test"
