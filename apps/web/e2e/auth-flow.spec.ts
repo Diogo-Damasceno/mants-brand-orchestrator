@@ -129,8 +129,10 @@ async function readExtensionToken(context: import('@playwright/test').BrowserCon
   const sw = context.serviceWorkers()[0] ?? null;
   if (!sw) return null;
   const token = await sw.evaluate(async () => {
-    const r = await (browser.storage.local.get('mants_session') as Promise<{ mants_session?: { token?: string } }>);
-    return r.mants_session?.token ?? null;
+    const browser = (globalThis as unknown as { browser: { storage: { local: { get: (k: string) => Promise<Record<string, unknown>> } } } }).browser;
+    const r = await browser.storage.local.get('mants_session');
+    const sess = r['mants_session'] as { token?: string } | undefined;
+    return sess?.token ?? null;
   }).catch(() => null);
   return token ?? null;
 }
@@ -142,8 +144,9 @@ async function readExtensionSessionRaw(context: import('@playwright/test').Brows
   const sw = context.serviceWorkers()[0] ?? null;
   if (!sw) return null;
   return sw.evaluate(async () => {
-    const r = await (browser.storage.local.get('mants_session') as Promise<Record<string, unknown>>);
-    return (r as Record<string, unknown>)['mants_session'] ?? null;
+    const browser = (globalThis as unknown as { browser: { storage: { local: { get: (k: string) => Promise<Record<string, unknown>> } } } }).browser;
+    const r = await browser.storage.local.get('mants_session');
+    return r['mants_session'] ?? null;
   }).catch(() => null);
 }
 
