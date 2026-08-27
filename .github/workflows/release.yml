@@ -260,11 +260,16 @@ jobs:
           for f in apps/extension/.output/*.zip; do
             test -s "$f" || { echo "ZIP vazio: $f"; exit 1; }
           done
+          # Copia para diretório dedicado (o upload-artifact não casa glob
+          # apps/extension/.output/*.zip de forma confiável no runner atual).
+          mkdir -p apps/extension/dist-zips
+          cp apps/extension/.output/*.zip apps/extension/dist-zips/
+          ls -la apps/extension/dist-zips/
       # 21) Inspeciona os ZIPs (sem source maps, sem localhost, manifest + JS presentes)
       - name: Inspeciona ZIPs
         run: |
           for z in chrome edge firefox; do
-            f=$(ls apps/extension/.output/*-${z}.zip 2>/dev/null | head -1)
+            f=$(ls apps/extension/dist-zips/*-${z}.zip 2>/dev/null | head -1)
             test -n "$f" || { echo "ZIP $z ausente"; exit 1; }
             python3 - "$f" <<'PY'
           import sys, zipfile, re
@@ -291,7 +296,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: extension-zips
-          path: apps/extension/.output/*.zip
+          path: apps/extension/dist-zips/
           if-no-files-found: error
       # Firefox: build obrigatório, manifest validado e ZIP criado/inspecionado acima.
       # Teste REAL no Firefox permanece como etapa separada e EXPLICITAMENTE PENDENTE.
