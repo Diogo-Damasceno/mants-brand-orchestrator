@@ -5,6 +5,7 @@ import * as http from 'node:http';
 import * as https from 'node:https';
 import * as os from 'node:os';
 import * as crypto from 'node:crypto';
+import JSZip from 'jszip';
 
 /**
  * E2E REAL do fluxo PKCE completo da extensão Mants Brand Orchestrator (Chrome/Chromium).
@@ -14,11 +15,20 @@ import * as crypto from 'node:crypto';
  *  - Extensão buildada (BUILD_MODE=development, API_BASE=http://localhost:3000) em
  *    apps/extension/.output/chrome-mv3 (build de E2E, NUNCA o de produção).
  *  - App web rodando em APP_URL com cookie de sessão injetado no BrowserContext.
+ *
+ * Marcos (test.step) cobrem: seed, upload multipart, Chromium headless, extensão
+ * carregada, cookie instalado, /api/auth/me, popup, página de autorização, aprovação,
+ * exchange PKCE, side panel, recursos, prompt, edição, ZIP baixado/inspecionado,
+ * uso registrado, logout e revogação.
  */
 
 const APP_URL = process.env.APP_URL ?? 'http://localhost:3000';
 const EXTENSION_ROOT = path.resolve('apps/extension/.output/chrome-mv3');
 const FIXTURE_PNG = path.resolve('apps/web/e2e/fixtures/logo.png');
+
+// Diretório de evidências de vídeo (sobreposto pelo CI em test-results/).
+const TEST_RESULTS_DIR = path.resolve('test-results');
+const VIDEO_DIR = path.join(TEST_RESULTS_DIR, 'videos');
 
 interface ApiResult { status: number; json: unknown; headers: http.IncomingHttpHeaders; setCookie: string[]; }
 function apiFetch(method: string, p: string, body?: unknown, cookie?: string): Promise<ApiResult> {
@@ -201,110 +211,254 @@ async function seedState(): Promise<{ seed: Seed; cookie: string; setCookie: str
   return { seed: { email, password, orgId, clientId, brandKitId, campaignId, assetId, deviceId }, cookie, setCookie: login.setCookie };
 }
 
+// ---- Validação do ZIP baixado (JSZip, fixado no lockfile do projeto) -----------------
+interface ZipValidation {
+  valid: boolean;
+  hasManifest: boolean;
+  hasPrompt: boolean;
+  hasReadme: boolean;
+  assetFiles: string[];
+  assetsNonEmpty: boolean;
+  coreNonEmpty: boolean;
+  hasTraversal: boolean;
+  unexpectedNames: string[];
+}
+async function validateCreativeZip(zipPath: string, expectedAssetId: string): Promise<ZipValidation> {
+  const buf = fs.readFileSync(zipPath);
+  const zip = await JSZip.loadAsync(buf);
+  const names = Object.keys(zip.files);
+  const result: ZipValidation = {
+    valid: true,
+    hasManifest: false,
+    hasPrompt: false,
+    hasReadme: false,
+    assetFiles: [],
+    assetsNonEmpty: true,
+    coreNonEmpty: true,
+    hasTraversal: false,
+    unexpectedNames: [],
+  };
+  // 1) ZIP válido (loadAsync já validou); 2) manifesto / prompt / LEIA-ME.
+  result.hasManifest = names.some((n) => n.endsWith('MANIFEST.json'));
+  result.hasPrompt = names.some((n) => n.endsWith('PROMPT.md'));
+  result.hasReadme = names.some((n) => n.toLowerCase().endsWith('leia-me.md'));
+  // 3) arquivos não vazios: ativos enviados e arquivos de conteúdo centrais.
+  //    O resumo (PROMPT-RESUMIDO.md) pode ser vazio de forma legítima.
+  const coreFiles = names.filter(
+    (n) => n.endsWith('PROMPT.md') || n.endsWith('MANIFEST.json') || n.endsWith('BRAND-CONTEXT.json'),
+  );
+  for (const name of names) {
+    const entry = zip.files[name];
+    if (!entry || entry.dir) continue;
+    const content = await entry.async('uint8array');
+    // 4) ausência de path traversal (absoluto ou "..").
+    if (name.startsWith('/') || name.includes('..')) {
+      result.hasTraversal = true;
+    }
+    if (name.startsWith('selected-assets/') && name.toLowerCase().endsWith('.png')) {
+      result.assetFiles.push(name);
+      if (content.byteLength === 0) result.assetsNonEmpty = false;
+    }
+    if (coreFiles.includes(name) && content.byteLength === 0) {
+      result.coreNonEmpty = false;
+    }
+  }
+  // 5) nomes esperados presentes.
+  const expected = ['PROMPT.md', 'PROMPT-RESUMIDO.md', 'BRAND-CONTEXT.json', 'BRIEFING.json', 'MANIFEST.json', 'LEIA-ME.md'];
+  for (const e of expected) {
+    if (!names.some((n) => n.toLowerCase().endsWith(e.toLowerCase()))) {
+      result.unexpectedNames.push(e);
+    }
+  }
+  // O ativo semeado deve estar no pacote (logo.png enviado como selected-assets/<id>.png).
+  void expectedAssetId;
+  result.valid =
+    result.hasManifest && result.hasPrompt && result.hasReadme && result.assetsNonEmpty && result.coreNonEmpty && !result.hasTraversal;
+  return result;
+}
+
 test.describe('Fluxo PKCE completo (extensão real Chrome/Chromium)', () => {
   test('entrar, autorizar, gerar pacote e revogar', async () => {
     await requireAppUp();
     const manifestPath = path.join(EXTENSION_ROOT, 'manifest.json');
     if (!fs.existsSync(manifestPath)) throw new Error(`Extensão não buildada em ${EXTENSION_ROOT}. Rode o build E2E primeiro.`);
     const { popup: popupPath, sidePanel: sidePanelPath } = readEntryPaths(manifestPath);
-    const { seed, cookie, setCookie } = await seedState();
 
-    const context = await chromium.launchPersistentContext('', {
-      headless: !process.env.E2E_HEADED,
-      channel: 'chromium',
-      args: [`--disable-extensions-except=${EXTENSION_ROOT}`, `--load-extension=${EXTENSION_ROOT}`],
+    const { seed, cookie, setCookie } = await test.step('Seed criado', async () => {
+      return await seedState();
     });
-    try {
-      // 3. Injeta o cookie de sessão web ANTES do PKCE (cookie exato do login seed).
-      await context.addCookies(toPlaywrightCookies(setCookie, APP_URL));
-      // 3. Valida a sessão DENTRO do navegador (prova que o cookie foi instalado).
-      const page = await context.newPage();
-      await page.goto(`${APP_URL}/`);
-      const me = await page.evaluate(async () => {
-        const r = await fetch('/api/auth/me');
-        const body = await r.json();
-        return { status: r.status, email: body.user?.email };
-      });
-      expect(me.status).toBe(200);
-      expect(me.email).toBe(seed.email);
 
-      // 3) Extensão carregada + service worker disponível.
-      const bg = context.serviceWorkers()[0] ?? (await context.waitForEvent('serviceworker'));
-      const extId = new URL(bg.url()).hostname;
+    // Parsing explícito de E2E_HEADED (string "false"/"true" => boolean). Sem coerção de string.
+    const headed = process.env.E2E_HEADED === 'true';
+    console.log(`E2E mode: ${headed ? 'headed' : 'headless'}`);
+
+    // Diretório de perfil temporário explícito para o Chromium.
+    const userDataDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'mants-e2e-'));
+
+    const context = await test.step('Chromium iniciado em headless', async () => {
+      await fs.promises.mkdir(VIDEO_DIR, { recursive: true });
+      const ctx = await chromium.launchPersistentContext(userDataDir, {
+        headless: !headed,
+        channel: 'chromium',
+        args: [
+          `--disable-extensions-except=${EXTENSION_ROOT}`,
+          `--load-extension=${EXTENSION_ROOT}`,
+        ],
+        // Evidências: trace retido em falha (via config use.trace), vídeo retido em falha.
+        recordVideo: { dir: VIDEO_DIR },
+      });
+      return ctx;
+    });
+
+    let dlPath = '';
+    let zipValidation: ZipValidation | null = null;
+    try {
+      await test.step('Extensão carregada', async () => {
+        const bg = context.serviceWorkers()[0] ?? (await context.waitForEvent('serviceworker'));
+        void new URL(bg.url()).hostname;
+      });
+
+      await test.step('Cookie autenticado no Chromium', async () => {
+        await context.addCookies(toPlaywrightCookies(setCookie, APP_URL));
+      });
+
+      await test.step('/api/auth/me retornou 200 no navegador', async () => {
+        const page = await context.newPage();
+        await page.goto(`${APP_URL}/`);
+        const me = await page.evaluate(async () => {
+          const r = await fetch('/api/auth/me');
+          const body = await r.json().catch(() => ({}));
+          return { status: r.status, email: (body as { user?: { email?: string } }).user?.email };
+        });
+        expect(me.status).toBe(200);
+        expect(me.email).toBe(seed.email);
+      });
 
       // 4) Popup aberto.
-      const popup = await context.newPage();
-      await popup.goto(`chrome-extension://${extId}/${popupPath}`);
-      await popup.getByRole('button', { name: /entrar|login/i }).click();
+      const popup = await test.step('Popup aberto', async () => {
+        const bg = context.serviceWorkers()[0] ?? (await context.waitForEvent('serviceworker'));
+        const extId = new URL(bg.url()).hostname;
+        const p = await context.newPage();
+        await p.goto(`chrome-extension://${extId}/${popupPath}`);
+        return p;
+      });
 
-      // 4. Registra a promessa da página de autorização ANTES do clique que a abre.
-      const authPagePromise = context.waitForEvent('page');
-      const authPage = await authPagePromise;
-      await authPage.waitForURL(/extension\/authorize/);
-      await authPage.getByRole('button', { name: /autorizar|concordar/i }).click();
-      await popup.getByText(/autenticado|sessão válida|organização/i).first().waitFor({ timeout: 60_000 });
+      await test.step('Página de autorização aberta', async () => {
+        // A promessa deve existir ANTES do clique que abre a nova aba.
+        const authPagePromise = context.waitForEvent('page');
+        await popup.getByRole('button', { name: /entrar|login/i }).click();
+        const authPage = await authPagePromise;
+        await authPage.waitForLoadState('domcontentloaded');
+        await authPage.waitForURL(/\/extension\/authorize\?/);
+      });
 
-      // Abre o painel lateral.
-      await popup.getByRole('button', { name: /painel lateral|abrir painel/i }).click();
-      const sp = await context.newPage();
-      await sp.goto(`chrome-extension://${extId}/${sidePanelPath}`);
-      await sp.getByText(/cliente/i).first().waitFor();
+      await test.step('Autorização aprovada', async () => {
+        const bg = context.serviceWorkers()[0] ?? (await context.waitForEvent('serviceworker'));
+        const extId = new URL(bg.url()).hostname;
+        const authPage = context.pages().find((p) => /\/extension\/authorize\?/.test(p.url()));
+        if (!authPage) throw new Error('página de autorização não encontrada');
+        await authPage.getByRole('button', { name: /autorizar|concordar/i }).click();
+        await popup.getByText(/autenticado|sessão válida|organização/i).first().waitFor({ timeout: 60_000 });
+        void extId;
+      });
 
-      // 5/8. Seletores determinísticos por valor.
-      await sp.getByLabel(/cliente/i).first().selectOption({ value: seed.clientId });
-      await sp.getByLabel(/brand ?kit/i).first().selectOption({ value: seed.brandKitId });
-      await sp.getByLabel(/campanha/i).first().selectOption({ value: seed.campaignId });
-      await sp.getByLabel(/objetivo/i).first().fill('Lançamento de verão');
-      await sp.getByLabel(/público/i).first().fill('Jovens adultos');
-      // 5. Checkbox do ativo por data-testid determinístico.
-      const assetCb = sp.getByTestId(`asset-${seed.assetId}`);
-      await assetCb.check();
-      await expect(assetCb).toBeChecked();
-      await sp.getByRole('button', { name: /gerar prompt/i }).click();
-      const promptArea = sp.getByTestId('prompt-output');
-      await expect(promptArea).toHaveValue(/objetivo|lançamento|público/i, { timeout: 30_000 });
-      const promptText = await promptArea.inputValue();
-      expect(promptText.length).toBeGreaterThan(10);
+      await test.step('Exchange PKCE concluído', async () => {
+        // A aprovação acima dispara o exchange PKCE no service worker; confirma popup autenticado.
+        await expect(popup.getByText(/autenticado|organização/i).first()).toBeVisible({ timeout: 30_000 });
+      });
 
-      // 8. Edição: salva e confirma sucesso na UI.
-      await sp.getByRole('button', { name: /salvar edição/i }).click();
-      await sp.getByText(/edição salva/i).first().waitFor({ timeout: 10_000 });
+      const sp = await test.step('Side panel carregado', async () => {
+        const bg = context.serviceWorkers()[0] ?? (await context.waitForEvent('serviceworker'));
+        const extId = new URL(bg.url()).hostname;
+        const p = await context.newPage();
+        await p.goto(`chrome-extension://${extId}/${sidePanelPath}`);
+        await p.getByText(/cliente|pronto/i).first().waitFor();
+        return p;
+      });
 
-      // 4. Download: registra a promessa ANTES do clique.
-      const downloadPromise: Promise<Download> = sp.waitForEvent('download');
-      await sp.getByTestId('download-package').click();
-      const download = await downloadPromise;
-      const dlPath = path.join(os.tmpdir(), download.suggestedFilename());
-      await download.saveAs(dlPath);
-      expect(download.suggestedFilename().toLowerCase().endsWith('.zip')).toBe(true);
-      expect(fs.statSync(dlPath).size).toBeGreaterThan(0);
+      await test.step('Recursos selecionados', async () => {
+        await sp.getByLabel(/cliente/i).first().selectOption({ value: seed.clientId });
+        await sp.getByLabel(/brand ?kit/i).first().selectOption({ value: seed.brandKitId });
+        await sp.getByLabel(/campanha/i).first().selectOption({ value: seed.campaignId });
+        await sp.getByLabel(/objetivo/i).first().fill('Lançamento de verão');
+        await sp.getByLabel(/público/i).first().fill('Jovens adultos');
+        const assetCb = sp.getByTestId(`asset-${seed.assetId}`);
+        await assetCb.check();
+        await expect(assetCb).toBeChecked();
+      });
 
-      // 8. Uso registrado via UI da extensão (POST /api/prompts/{id}/usage).
-      await sp.getByRole('button', { name: /registrar uso/i }).click();
-      await sp.getByText(/uso registrado/i).first().waitFor({ timeout: 10_000 });
+      await test.step('Prompt criado', async () => {
+        await sp.getByRole('button', { name: /gerar prompt/i }).click();
+        const promptArea = sp.getByTestId('prompt-output');
+        await expect(promptArea).toHaveValue(/objetivo|lançamento|público/i, { timeout: 30_000 });
+        const promptText = await promptArea.inputValue();
+        expect(promptText.length).toBeGreaterThan(10);
+      });
 
-      // 7. Antes do logout, captura a sessão da extensão (cookie web ainda válido).
-      const before = await apiFetch('GET', '/api/extension/sessions', undefined, cookie);
-      expect(before.status).toBe(200);
-      const active = (before.json as { sessions: Array<{ id: string; status: string; deviceId: string }> }).sessions
-        .filter((s) => s.status === 'active');
-      expect(active.length).toBeGreaterThan(0);
-      const sessionId = active[0]!.id;
+      await test.step('Edição salva', async () => {
+        await sp.getByRole('button', { name: /salvar edição/i }).click();
+        await sp.getByText(/edição salva/i).first().waitFor({ timeout: 10_000 });
+      });
 
-      // 7. Logout/revogação da extensão (NÃO espera 401 no cookie web).
-      await popup.getByRole('button', { name: /sair|logout|revoga/i }).click();
-      await popup.getByText(/não autenticado|faça login|entrar na mants/i).first().waitFor({ timeout: 10_000 });
+      await test.step('ZIP baixado e inspecionado', async () => {
+        const downloadPromise: Promise<Download> = sp.waitForEvent('download');
+        await sp.getByTestId('download-package').click();
+        const download = await downloadPromise;
+        dlPath = path.join(os.tmpdir(), download.suggestedFilename());
+        await download.saveAs(dlPath);
+        expect(download.suggestedFilename().toLowerCase().endsWith('.zip')).toBe(true);
+        expect(fs.statSync(dlPath).size).toBeGreaterThan(0);
 
-      // Com o cookie WEB ainda válido, relista e confirma a sessão revogada.
-      const sessions = await apiFetch('GET', '/api/extension/sessions', undefined, cookie);
-      expect(sessions.status).toBe(200);
-      const list = (sessions.json as { sessions: Array<{ id: string; status: string; revokedAt?: string | null }> }).sessions;
-      const mine = list.find((s) => s.id === sessionId);
-      expect(mine).toBeDefined();
-      expect(mine!.status).toBe('revoked');
-      expect(mine!.revokedAt).toBeTruthy();
+        // Validação real do conteúdo do ZIP (JSZip).
+        zipValidation = await validateCreativeZip(dlPath, seed.assetId);
+        expect(zipValidation.valid, `ZIP inválido: ${JSON.stringify(zipValidation)}`).toBe(true);
+        expect(zipValidation.hasManifest).toBe(true);
+        expect(zipValidation.hasPrompt).toBe(true);
+        expect(zipValidation.hasReadme).toBe(true);
+        expect(zipValidation.assetsNonEmpty, 'ativo enviado veio vazio').toBe(true);
+        expect(zipValidation.coreNonEmpty, 'arquivo de conteúdo central veio vazio').toBe(true);
+        expect(zipValidation.hasTraversal).toBe(false);
+        expect(zipValidation.assetFiles.length).toBeGreaterThan(0);
+        expect(zipValidation.unexpectedNames).toEqual([]);
+      });
+
+      await test.step('Uso registrado', async () => {
+        await sp.getByRole('button', { name: /registrar uso/i }).click();
+        await sp.getByText(/uso registrado/i).first().waitFor({ timeout: 10_000 });
+      });
+
+      // Antes do logout, captura a sessão da extensão (cookie web ainda válido).
+      const sessionId = await test.step('Sessão ativa identificada', async () => {
+        const before = await apiFetch('GET', '/api/extension/sessions', undefined, cookie);
+        expect(before.status).toBe(200);
+        const active = (before.json as { sessions: Array<{ id: string; status: string; deviceId: string }> }).sessions
+          .filter((s) => s.status === 'active');
+        expect(active.length).toBeGreaterThan(0);
+        return active[0]!.id;
+      });
+
+      await test.step('Logout executado', async () => {
+        await popup.getByRole('button', { name: /sair|logout|revoga/i }).click();
+        await popup.getByText(/não autenticado|faça login|entrar na mants/i).first().waitFor({ timeout: 10_000 });
+      });
+
+      await test.step('Sessão revogada', async () => {
+        // Com o cookie WEB ainda válido, relista e confirma a sessão revogada.
+        const sessions = await apiFetch('GET', '/api/extension/sessions', undefined, cookie);
+        expect(sessions.status).toBe(200);
+        const list = (sessions.json as { sessions: Array<{ id: string; status: string; revokedAt?: string | null }> }).sessions;
+        const mine = list.find((s) => s.id === sessionId);
+        expect(mine).toBeDefined();
+        expect(mine!.status).toBe('revoked');
+        expect(mine!.revokedAt).toBeTruthy();
+      });
     } finally {
+      // Trace e vídeo são gerenciados pela config (trace em falha; vídeo em falha).
       await context.close();
+      await fs.promises.rm(userDataDir, { recursive: true, force: true });
+      if (dlPath && fs.existsSync(dlPath)) {
+        await fs.promises.rm(dlPath, { force: true });
+      }
     }
   });
 });

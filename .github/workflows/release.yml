@@ -19,8 +19,8 @@ jobs:
     env:
       # Banco administrativo (existente) usado para CRIAR o mants_test.
       # Senha igual ao docker-compose.yml do repositório (infra de dev/teste).
-      DATABASE_ADMIN_URL: postgresql://mants:mants_password@localhost:5432/mants_db
-      DATABASE_URL: postgresql://mants:mants_password@localhost:5432/mants_test
+      DATABASE_ADMIN_URL: postgresql://mants:***@localhost:5432/mants_db
+      DATABASE_URL: postgresql://mants:***@localhost:5432/mants_test
       STORAGE_ENDPOINT: http://localhost:9000
       STORAGE_ACCESS_KEY_ID: mants_minio
       STORAGE_SECRET_ACCESS_KEY: mants_minio_secret
@@ -68,7 +68,7 @@ jobs:
       # 5b) Cria banco de teste (URL administrativa; sem ocultar falha)
       - name: Cria banco de teste (URL administrativa)
         env:
-          DATABASE_ADMIN_URL: postgresql://mants:mants_password@localhost:5432/mants_db
+          DATABASE_ADMIN_URL: postgresql://mants:***@localhost:5432/mants_db
         run: |
           docker exec mants-postgres psql -U mants -d mants_db -tc "SELECT 1 FROM pg_database WHERE datname='mants_test'" | grep -q 1 || \
           docker exec mants-postgres psql -U mants -d mants_db -c "CREATE DATABASE mants_test"
@@ -104,11 +104,15 @@ jobs:
       # 10) Integração (Postgres + MinIO obrigatórios)
       - name: Integração
         run: pnpm test:integration --reporter=basic
-      # 11) Build web — servido em modo dev para o E2E (o `next build` de produção
-      #     tem um defeito pré-existente de prerender fora do escopo desta rodada da
-      #     extensão; o E2E usa `next dev`, que é a opção recomendada pela tarefa).
-      - name: Build web (dev server para E2E)
-        run: echo "O E2E usa 'next dev' (web app). O 'next build' de produção é rastreado como issue separada (defeito de prerender pré-existente)."
+      # 11) Build web de PRODUÇÃO — obrigatório (publicação/homologação exigem compilação).
+      - name: Build web (produção)
+        env:
+          NODE_ENV: production
+          NEXT_TELEMETRY_DISABLED: '1'
+          APP_URL: ${{ secrets.API_BASE || 'https://api.mants.company' }}
+          API_BASE_URL: ${{ secrets.API_BASE || 'https://api.mants.company' }}
+          AUTH_SECRET: ${{ secrets.AUTH_SECRET || 'change-me-dev-secret-min-32-chars-long-0000000000' }}
+        run: pnpm --filter @mants/web build
       # 12) Build Chrome LOCAL para E2E (API_BASE=localhost, development)
       - name: Build Chrome LOCAL para E2E
         env:
@@ -122,9 +126,13 @@ jobs:
           API_BASE: http://localhost:3000
           E2E_HEADED: 'false'
         run: |
-          pnpm --filter @mants/web dev &
+          pnpm --filter @mants/web dev > web-e2e.log 2>&1 &
           SRV=$!
-          trap 'kill "$SRV" 2>/dev/null || true' EXIT
+
+          cleanup() {
+            kill "$SRV" 2>/dev/null || true
+          }
+          trap cleanup EXIT
 
           for i in $(seq 1 30); do
             curl -fsS http://localhost:3000/api/health/ready >/dev/null && break
@@ -134,11 +142,29 @@ jobs:
 
           pnpm exec playwright install --with-deps chromium
           pnpm test:e2e
-          kill "$SRV"
       # 15) Remove build local de E2E
       - name: Remove build local de E2E
+        if: always()
         run: rm -rf apps/extension/.output/chrome-mv3
-      # 16) Valida API_BASE de produção (secret obrigatório, sem fallback silencioso)
+      # 16) Publica logs do servidor mesmo em falha (diagnóstico).
+      - name: Upload logs do servidor web (diagnóstico)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-e2e-log
+          path: web-e2e.log
+          if-no-files-found: warn
+      # 16b) Publica evidências do Playwright mesmo em falha (trace/screenshot/video).
+      - name: Upload evidências Playwright
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-evidence
+          path: |
+            playwright-report/
+            test-results/
+          if-no-files-found: warn
+      # 17) Valida API_BASE de produção (secret obrigatório, sem fallback silencioso)
       - name: Valida API_BASE de produção (obrigatório, sem fallback silencioso)
         env:
           API_BASE: ${{ secrets.API_BASE }}
@@ -156,7 +182,7 @@ jobs:
           # definido explicitamente no secret.
           echo "$API_BASE" | grep -qiE 'SEU_DOMINIO|your-domain|example\.com' && { echo "API_BASE é placeholder genérico"; exit 1; }
           echo "API_BASE válido: $API_BASE"
-      # 16b) Builds de PRODUÇÃO Chrome, Edge e Firefox (API_BASE via secret obrigatório)
+      # 17b) Builds de PRODUÇÃO Chrome, Edge e Firefox (API_BASE via secret obrigatório)
       - name: Builds de PRODUÇÃO (Chrome, Edge, Firefox)
         env:
           BUILD_MODE: production
@@ -169,7 +195,7 @@ jobs:
           test -d apps/extension/.output/chrome-mv3 || { echo "Build Chrome ausente"; exit 1; }
           test -d apps/extension/.output/edge-mv3 || { echo "Build Edge ausente"; exit 1; }
           test -d apps/extension/.output/firefox-mv3 || { echo "Build Firefox ausente"; exit 1; }
-      # 17) Inspeciona manifests (sem localhost; Chrome/Edge com side_panel, Firefox com sidebar_action + gecko)
+      # 18) Inspeciona manifests (sem localhost; Chrome/Edge com side_panel, Firefox com sidebar_action + gecko)
       - name: Inspeciona manifests (sem localhost)
         run: |
           for d in chrome-mv3 edge-mv3 firefox-mv3; do
@@ -197,7 +223,7 @@ jobs:
             need(fx,"background"); need(fx,"icons"); need(fx,"host_permissions");
             console.log("manifests OK");
           '
-      # 18) Verifica ícones obrigatórios ANTES dos ZIPs (dimensões exatas via cabeçalho PNG)
+      # 19) Verifica ícones obrigatórios ANTES dos ZIPs (dimensões exatas via cabeçalho PNG)
       - name: Verifica ícones técnicos (antes dos ZIPs)
         run: |
           for s in 16 32 48 96 128; do
@@ -213,7 +239,7 @@ jobs:
           print(p, f"{w}x{h} OK")
           PY
           done
-      # 19) Cria os três ZIPs (env de produção obrigatório — wxt zip reavalia o config).
+      # 20) Cria os três ZIPs (env de produção obrigatório — wxt zip reavalia o config).
       - name: ZIPs (Chrome, Edge, Firefox)
         env:
           BUILD_MODE: production
@@ -228,7 +254,7 @@ jobs:
           for f in apps/extension/.output/*.zip; do
             test -s "$f" || { echo "ZIP vazio: $f"; exit 1; }
           done
-      # 20) Inspeciona os ZIPs (sem source maps, sem localhost, manifest + JS presentes)
+      # 21) Inspeciona os ZIPs (sem source maps, sem localhost, manifest + JS presentes)
       - name: Inspeciona ZIPs
         run: |
           for z in chrome edge firefox; do
@@ -254,7 +280,7 @@ jobs:
           print("OK", z, len(names), "arquivos")
           PY
           done
-      # 21) Upload artefatos (ZIPs) para homologação
+      # 22) Upload artefatos (ZIPs) para homologação
       - name: Upload artefatos (ZIPs)
         uses: actions/upload-artifact@v4
         with:
@@ -265,7 +291,7 @@ jobs:
       # Teste REAL no Firefox permanece como etapa separada e EXPLICITAMENTE PENDENTE.
       - name: Firefox E2E (pendente — não executado aqui)
         run: |
-          echo "Firefox E2E: PENDENTE (etapa separada). Build e manifest Firefox validados; ZIP Firefox gerado e inspecionado."
+          echo "Firefox E2E: NÃO (etapa separada). Build e manifest Firefox validados; ZIP Firefox gerado e inspecionado."
       - name: Encerra containers
         if: always()
         run: docker rm -f mants-minio mants-postgres 2>/dev/null || true

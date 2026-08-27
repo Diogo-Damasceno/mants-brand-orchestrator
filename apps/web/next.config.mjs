@@ -16,6 +16,14 @@ const nextConfig = {
     '@mants/database',
   ],
   async headers() {
+    // Em desenvolvimento (next dev), o runtime do Next injeta código que exige
+    // 'unsafe-eval' (Fast Refresh / dev runtime). Sem isso, o JS do cliente não
+    // executa e páginas client component ficam sem hidratação (travadas no
+    // fallback de <Suspense>). Em produção NÃO usamos unsafe-eval.
+    const isDev = process.env.NODE_ENV !== 'production';
+    const scriptSrc = isDev
+      ? "'self' 'unsafe-inline' 'unsafe-eval'"
+      : "'self' 'unsafe-inline'";
     return [
       {
         source: '/(.*)',
@@ -26,7 +34,7 @@ const nextConfig = {
           {
             key: 'Content-Security-Policy',
             value:
-              "default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'",
+              `default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src ${scriptSrc}; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'`,
           },
         ],
       },

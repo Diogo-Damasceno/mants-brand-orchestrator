@@ -22,7 +22,10 @@ export default defineConfig({
   use: {
     baseURL: process.env.APP_URL ?? 'http://localhost:3000',
     headless: true,
-    trace: 'on-first-retry',
+    // Evidências exigidas: trace retido em falha, screenshot só em falha, vídeo retido em falha.
+    trace: 'retain-on-failure',
+    screenshot: 'only-on-failure',
+    video: 'retain-on-failure',
   },
   projects: [
     {
