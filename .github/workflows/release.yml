@@ -203,7 +203,8 @@ jobs:
             test -f apps/extension/.output/$d/manifest.json || { echo "manifest ausente em $d"; exit 1; }
           done
           # Rejeita apenas uso ATIVO de localhost como origem.
-          if rg -n "localhost:3000|http://localhost" apps/extension/.output/chrome-mv3 apps/extension/.output/edge-mv3 apps/extension/.output/firefox-mv3; then
+          # (grep -rE em vez de rg: o runner ubuntu não traz ripgrep por padrão.)
+          if grep -rE "localhost:3000|http://localhost" apps/extension/.output/chrome-mv3 apps/extension/.output/edge-mv3 apps/extension/.output/firefox-mv3; then
             echo "localhost ativo em build de produção"; exit 1
           fi
           node -e '
@@ -214,11 +215,15 @@ jobs:
             const need=(o,k)=>{ if(!o[k]) throw new Error("manifest sem "+k); };
             for(const [n,m] of [["chrome",chrome],["edge",edge]]){
               need(m,"action"); need(m.action,"default_popup");
-              need(m,"side_panel"); need(m.side_panel,"default_path");
+              need(m,"side_panel");
+              const sp=m.side_panel.default_path ?? m.side_panel.default_panel;
+              if(!sp) throw new Error("side_panel sem default_path/default_panel em "+n);
               need(m,"background"); need(m.background,"service_worker");
               need(m,"content_scripts"); need(m,"icons"); need(m,"host_permissions");
             }
-            need(fx,"sidebar_action"); need(fx.sidebar_action,"default_path");
+            need(fx,"sidebar_action");
+            const fxPath=fx.sidebar_action.default_path ?? fx.sidebar_action.default_panel;
+            if(!fxPath) throw new Error("sidebar_action sem default_path/default_panel (firefox)");
             need(fx,"browser_specific_settings"); need(fx.browser_specific_settings,"gecko");
             need(fx.browser_specific_settings.gecko,"id");
             need(fx,"background"); need(fx,"icons"); need(fx,"host_permissions");
